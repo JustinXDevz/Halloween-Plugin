@@ -1,0 +1,97 @@
+# Chat prefix (MiniMessage format)
+prefix: "<gold>Halloween <dark_gray>» <gray>"
+
+event:
+  # true = event is always on (handy for testing)
+  always-active: false
+  # Inclusive dates, format yyyy-MM-dd (server local time)
+  start-date: "2026-10-20"
+  end-date: "2026-11-01"
+
+pumpkin-hunt:
+  spawn-interval-seconds: 60   # try to spawn one every N seconds
+  max-active: 8                # max cursed pumpkins in the world at once
+  min-distance: 15             # spawn distance from the chosen player
+  max-distance: 50
+  lifetime-seconds: 300        # despawn if nobody finds it
+  candy-min: 3
+  candy-max: 8
+
+# Rules for RANDOM spawns. They only ever use an empty air block on natural
+# ground under open sky with a free 3x3x2 area, so nothing gets overwritten
+# and builds/caves are avoided.
+spawning:
+  worlds: []                   # empty = every overworld; or list world names
+  safe-ground:
+    - GRASS_BLOCK
+    - DIRT
+    - COARSE_DIRT
+    - PODZOL
+    - MYCELIUM
+    - ROOTED_DIRT
+    - SAND
+    - RED_SAND
+    - GRAVEL
+    - STONE
+    - SNOW_BLOCK
+    - TERRACOTTA
+
+trick-or-treat:
+  auto-spawn:
+    enabled: true              # temporary NPCs appear near random players
+    interval-seconds: 300
+    max-active: 3
+    lifetime-seconds: 900      # they vanish after 15 min (never saved to the world)
+    min-distance: 20
+    max-distance: 60
+  cooldown-seconds: 60
+  trick-chance: 0.2            # 20% chance of a trick
+  candy-min: 3
+  candy-max: 8
+
+# Each item runs its commands as console when bought. %player% = buyer.
+# Swap in commands from your crate / cosmetics plugins if you have them.
+shop:
+  items:
+    pumpkin_pie:
+      material: PUMPKIN_PIE
+      name: "<gold>Pumpkin Pie Feast"
+      lore: ["<gray>16 pumpkin pies"]
+      cost: 10
+      commands:
+        - "give %player% pumpkin_pie 16"
+    night_vision:
+      material: GOLDEN_CARROT
+      name: "<aqua>Witch's Eyesight"
+      lore: ["<gray>Night vision for 10 minutes"]
+      cost: 30
+      commands:
+        - "effect give %player% night_vision 600 0 true"
+    golden_apples:
+      material: GOLDEN_APPLE
+      name: "<yellow>Candied Apples"
+      lore: ["<gray>3 golden apples"]
+      cost: 25
+      commands:
+        - "give %player% golden_apple 3"
+    pumpkin_head:
+      material: CARVED_PUMPKIN
+      name: "<gold>Pumpkin Head"
+      lore: ["<gray>Wear it proudly"]
+      cost: 50
+      commands:
+        - "give %player% carved_pumpkin 1"
+    xp_bottles:
+      material: EXPERIENCE_BOTTLE
+      name: "<green>Bottled Spirits"
+      lore: ["<gray>16 bottles o' enchanting"]
+      cost: 40
+      commands:
+        - "give %player% experience_bottle 16"
+    totem:
+      material: TOTEM_OF_UNDYING
+      name: "<light_purple>Ghostly Totem"
+      lore: ["<gray>Cheat death once"]
+      cost: 150
+      commands:
+        - "give %player% totem_of_undying 1"
