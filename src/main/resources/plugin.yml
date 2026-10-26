@@ -2,7 +2,7 @@ name: Halloween
 version: ${project.version}
 main: com.example.halloween.HalloweenPlugin
 api-version: '1.21'
-description: Seasonal Halloween event - collect candy, hunt pumpkins, trick-or-treat.
+description: Seasonal Halloween event By Just1n- collect candy, hunt pumpkins, trick-or-treat.
 
 commands:
   halloween:
