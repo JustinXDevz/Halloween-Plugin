@@ -1,0 +1,22 @@
+name: Halloween
+version: ${project.version}
+main: com.example.halloween.HalloweenPlugin
+api-version: '1.21'
+description: Seasonal Halloween event - collect candy, hunt pumpkins, trick-or-treat.
+
+commands:
+  halloween:
+    description: Halloween event info and admin tools
+    usage: /halloween [npc [remove]|pumpkin [random]|give|reload]
+  candy:
+    description: Check your candy or view the leaderboard
+    usage: /candy [top]
+  halloweenshop:
+    description: Open the Halloween candy shop
+    usage: /halloweenshop
+    aliases: [hshop]
+
+permissions:
+  halloween.admin:
+    description: Use admin subcommands
+    default: op
