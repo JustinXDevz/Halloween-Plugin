@@ -49,6 +49,35 @@ trick-or-treat:
   candy-min: 3
   candy-max: 8
 
+# Haunted Zones: create with /halloween zone create <name> [radius] (centered on you).
+# Inside a zone: fog, spooky sounds, extra mobs and bonus candy.
+haunted-zones:
+  default-radius: 30
+  candy-multiplier: 2          # pumpkin + trick-or-treat candy is multiplied inside zones
+  max-mobs-per-zone: 6
+  mob-spawn-interval-seconds: 8
+  # Zombies/skeletons get a pumpkin helmet so they don't burn in daylight
+  mobs: [ZOMBIE, SKELETON, SPIDER, WITCH]
+  kill-candy-chance: 0.6       # chance a haunted mob drops candy when a player kills it
+  kill-candy-min: 1
+  kill-candy-max: 3
+
+# Infection: an infected zone keeps growing and eats the land (natural ground turns
+# cursed, everything else in the top layers is destroyed, builds included) until its
+# Cursed Creaking Heart is destroyed. Everything it changed is then restored.
+# Chests, signs, beds and other containers are never touched. When the event ends,
+# every infection is cleansed automatically.
+infection:
+  auto-start: true             # zones start spreading as soon as they are created
+  start-radius: 6
+  spread-blocks: 4             # grows by this much...
+  spread-interval-seconds: 10  # ...every N seconds
+  max-radius: 100
+  depth: 6                     # how many blocks down from the surface are corrupted
+  columns-per-tick: 30         # speed limits that keep the server smooth
+  restore-blocks-per-tick: 300
+  cleanse-reward: 50           # candy for the player who destroys the heart
+
 # Each item runs its commands as console when bought. %player% = buyer.
 # Swap in commands from your crate / cosmetics plugins if you have them.
 shop:
