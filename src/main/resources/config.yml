@@ -3,7 +3,7 @@ prefix: "<gold>Halloween <dark_gray>» <gray>"
 
 event:
   # true = event is always on (handy for testing)
-  always-active: false
+  always-active: true
   # Inclusive dates, format yyyy-MM-dd (server local time)
   start-date: "2026-10-20"
   end-date: "2026-11-01"
