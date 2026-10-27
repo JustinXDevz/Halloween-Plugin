@@ -81,6 +81,7 @@ infection:
 # Each item runs its commands as console when bought. %player% = buyer.
 # Swap in commands from your crate / cosmetics plugins if you have them.
 shop:
+  # Always available
   items:
     pumpkin_pie:
       material: PUMPKIN_PIE
@@ -89,13 +90,27 @@ shop:
       cost: 10
       commands:
         - "give %player% pumpkin_pie 16"
-    night_vision:
-      material: GOLDEN_CARROT
-      name: "<aqua>Witch's Eyesight"
-      lore: ["<gray>Night vision for 10 minutes"]
-      cost: 30
+    candy_cookies:
+      material: COOKIE
+      name: "<#d2691e>Candy Cookies"
+      lore: ["<gray>32 cookies"]
+      cost: 8
       commands:
-        - "effect give %player% night_vision 600 0 true"
+        - "give %player% cookie 32"
+    spooky_cake:
+      material: CAKE
+      name: "<light_purple>Spooky Cake"
+      lore: ["<gray>A whole cake"]
+      cost: 15
+      commands:
+        - "give %player% cake 1"
+    golden_carrots:
+      material: GOLDEN_CARROT
+      name: "<yellow>Glazed Carrots"
+      lore: ["<gray>16 golden carrots"]
+      cost: 20
+      commands:
+        - "give %player% golden_carrot 16"
     golden_apples:
       material: GOLDEN_APPLE
       name: "<yellow>Candied Apples"
@@ -103,13 +118,48 @@ shop:
       cost: 25
       commands:
         - "give %player% golden_apple 3"
-    pumpkin_head:
-      material: CARVED_PUMPKIN
-      name: "<gold>Pumpkin Head"
-      lore: ["<gray>Wear it proudly"]
-      cost: 50
+    broom_speed:
+      material: SUGAR
+      name: "<aqua>Broomstick Fuel"
+      lore: ["<gray>Speed II for 10 minutes"]
+      cost: 25
       commands:
-        - "give %player% carved_pumpkin 1"
+        - "effect give %player% speed 600 1 true"
+    night_vision:
+      material: SPIDER_EYE
+      name: "<aqua>Witch's Eyesight"
+      lore: ["<gray>Night vision for 10 minutes"]
+      cost: 30
+      commands:
+        - "effect give %player% night_vision 600 0 true"
+    ghost_walk:
+      material: FERMENTED_SPIDER_EYE
+      name: "<white>Ghost Walk"
+      lore: ["<gray>Invisible for 5 minutes"]
+      cost: 35
+      commands:
+        - "effect give %player% invisibility 300 0 true"
+    high_jump:
+      material: RABBIT_FOOT
+      name: "<green>Bat Leap"
+      lore: ["<gray>Jump Boost II for 5 minutes"]
+      cost: 25
+      commands:
+        - "effect give %player% jump_boost 300 1 true"
+    stone_skin:
+      material: SHIELD
+      name: "<gray>Gargoyle Skin"
+      lore: ["<gray>Resistance for 5 minutes"]
+      cost: 45
+      commands:
+        - "effect give %player% resistance 300 0 true"
+    pumpkin_strength:
+      material: BLAZE_POWDER
+      name: "<red>Pumpkin Strength"
+      lore: ["<gray>Strength for 5 minutes"]
+      cost: 45
+      commands:
+        - "effect give %player% strength 300 0 true"
     xp_bottles:
       material: EXPERIENCE_BOTTLE
       name: "<green>Bottled Spirits"
@@ -117,6 +167,55 @@ shop:
       cost: 40
       commands:
         - "give %player% experience_bottle 16"
+    ender_pearls:
+      material: ENDER_PEARL
+      name: "<dark_aqua>Portal Pearls"
+      lore: ["<gray>4 ender pearls"]
+      cost: 30
+      commands:
+        - "give %player% ender_pearl 4"
+    fireworks:
+      material: FIREWORK_ROCKET
+      name: "<red>Spooky Fireworks"
+      lore: ["<gray>16 rockets"]
+      cost: 20
+      commands:
+        - "give %player% firework_rocket 16"
+    arrows:
+      material: ARROW
+      name: "<gray>Bone Arrows"
+      lore: ["<gray>32 arrows"]
+      cost: 15
+      commands:
+        - "give %player% arrow 32"
+    name_tags:
+      material: NAME_TAG
+      name: "<white>Spirit Tags"
+      lore: ["<gray>3 name tags"]
+      cost: 20
+      commands:
+        - "give %player% name_tag 3"
+    bone_meal:
+      material: BONE_MEAL
+      name: "<white>Grave Dust"
+      lore: ["<gray>32 bone meal"]
+      cost: 15
+      commands:
+        - "give %player% bone_meal 32"
+    diamond:
+      material: DIAMOND
+      name: "<aqua>Cursed Diamond"
+      lore: ["<gray>One diamond"]
+      cost: 100
+      commands:
+        - "give %player% diamond 1"
+    netherite_scrap:
+      material: NETHERITE_SCRAP
+      name: "<dark_gray>Hellfire Scrap"
+      lore: ["<gray>2 netherite scrap"]
+      cost: 300
+      commands:
+        - "give %player% netherite_scrap 2"
     totem:
       material: TOTEM_OF_UNDYING
       name: "<light_purple>Ghostly Totem"
@@ -124,3 +223,223 @@ shop:
       cost: 150
       commands:
         - "give %player% totem_of_undying 1"
+    pumpkin_head:
+      material: CARVED_PUMPKIN
+      name: "<gold>Pumpkin Head"
+      lore: ["<gray>Wear it proudly"]
+      cost: 50
+      commands:
+        - "give %player% carved_pumpkin 1"
+    jack_o_lanterns:
+      material: JACK_O_LANTERN
+      name: "<gold>Jack-o'-Lanterns"
+      lore: ["<gray>8 lanterns"]
+      cost: 15
+      commands:
+        - "give %player% jack_o_lantern 8"
+    cobwebs:
+      material: COBWEB
+      name: "<white>Cobweb Bundle"
+      lore: ["<gray>16 cobwebs"]
+      cost: 10
+      commands:
+        - "give %player% cobweb 16"
+    candles:
+      material: CANDLE
+      name: "<yellow>Haunted Candles"
+      lore: ["<gray>8 candles"]
+      cost: 12
+      commands:
+        - "give %player% candle 8"
+    soul_lanterns:
+      material: SOUL_LANTERN
+      name: "<aqua>Soul Lanterns"
+      lore: ["<gray>4 soul lanterns"]
+      cost: 20
+      commands:
+        - "give %player% soul_lantern 4"
+  # A pool of specials: 'count' of them are picked each day (same picks for everyone),
+  # so the shop looks different every day.
+  rotating:
+    count: 6
+    items:
+      skeleton_skull:
+        material: SKELETON_SKULL
+        name: "<white>Skeleton Skull"
+        lore: ["<gray>Decoration"]
+        cost: 60
+        commands:
+          - "give %player% skeleton_skull 1"
+      zombie_head:
+        material: ZOMBIE_HEAD
+        name: "<green>Zombie Head"
+        lore: ["<gray>Decoration"]
+        cost: 60
+        commands:
+          - "give %player% zombie_head 1"
+      creeper_head:
+        material: CREEPER_HEAD
+        name: "<dark_green>Creeper Head"
+        lore: ["<gray>Decoration"]
+        cost: 80
+        commands:
+          - "give %player% creeper_head 1"
+      wither_skull:
+        material: WITHER_SKELETON_SKULL
+        name: "<dark_gray>Wither Skull"
+        lore: ["<gray>Very spooky decoration"]
+        cost: 200
+        commands:
+          - "give %player% wither_skeleton_skull 1"
+      bat_egg:
+        material: BAT_SPAWN_EGG
+        name: "<dark_purple>Bat Egg"
+        lore: ["<gray>Releases a bat"]
+        cost: 60
+        commands:
+          - "give %player% bat_spawn_egg 1"
+      cat_egg:
+        material: CAT_SPAWN_EGG
+        name: "<gold>Black Cat Egg"
+        lore: ["<gray>Spawns a cat"]
+        cost: 70
+        commands:
+          - "give %player% cat_spawn_egg 1"
+      skull_pattern:
+        material: SKULL_BANNER_PATTERN
+        name: "<white>Skull Banner Pattern"
+        lore: ["<gray>For banners"]
+        cost: 120
+        commands:
+          - "give %player% skull_banner_pattern 1"
+      spooky_record:
+        material: MUSIC_DISC_11
+        name: "<dark_gray>Haunted Record"
+        lore: ["<gray>Do not play at night"]
+        cost: 150
+        commands:
+          - "give %player% music_disc_11 1"
+      enchanted_apple:
+        material: ENCHANTED_GOLDEN_APPLE
+        name: "<light_purple>Cursed Apple"
+        lore: ["<gray>Very rare treat"]
+        cost: 350
+        commands:
+          - "give %player% enchanted_golden_apple 1"
+      sculk_catalyst:
+        material: SCULK_CATALYST
+        name: "<dark_aqua>Sculk Catalyst"
+        lore: ["<gray>Decoration"]
+        cost: 90
+        commands:
+          - "give %player% sculk_catalyst 1"
+      hay_bales:
+        material: HAY_BLOCK
+        name: "<yellow>Scarecrow Stuffing"
+        lore: ["<gray>8 hay bales"]
+        cost: 20
+        commands:
+          - "give %player% hay_block 8"
+
+# ---------------------------------------------------------------------------
+# Rare Merchant - only summoned with /halloween merchant. Each summon rolls a
+# different set of goods from the pool below (random prices too). Items use
+# enchantment levels vanilla can't reach, and combinations it doesn't allow.
+# Stock is limited, so a merchant runs out. Enchant format: name:level
+# ---------------------------------------------------------------------------
+merchant:
+  name: "<dark_purple>Rare Merchant"
+  offers-per-summon: 6         # max 14
+  stock-per-offer: 1           # how many of each item can be bought
+  price-variation: 0.15        # each summon the price is +/- 15%
+  pool:
+    reaper_edge:
+      material: NETHERITE_SWORD
+      name: "<dark_red>Reaper's Edge"
+      lore: ["<gray>A blade that drinks souls", "<dark_purple>Rare Merchant exclusive"]
+      cost: 2500
+      enchants: ["sharpness:10", "fire_aspect:4", "looting:6", "sweeping_edge:6", "knockback:3", "unbreaking:10", "mending:1"]
+    gilded_fang:
+      material: GOLDEN_SWORD
+      name: "<gold>Gilded Fang"
+      lore: ["<gray>Gold has never cut this sharp", "<dark_purple>Rare Merchant exclusive"]
+      cost: 1000
+      enchants: ["sharpness:9", "looting:5", "sweeping_edge:4", "unbreaking:8", "mending:1"]
+    bone_reaver:
+      material: DIAMOND_SWORD
+      name: "<white>Bone Reaver"
+      lore: ["<gray>Carved from something ancient", "<dark_purple>Rare Merchant exclusive"]
+      cost: 900
+      enchants: ["sharpness:7", "smite:7", "bane_of_arthropods:7", "unbreaking:6", "mending:1"]
+    grave_cleaver:
+      material: NETHERITE_AXE
+      name: "<dark_gray>Grave Cleaver"
+      lore: ["<gray>Every damage enchant at once", "<dark_purple>Rare Merchant exclusive"]
+      cost: 2200
+      enchants: ["sharpness:12", "smite:10", "bane_of_arthropods:10", "efficiency:8", "unbreaking:10", "mending:1"]
+    witchfire_bow:
+      material: BOW
+      name: "<red>Witchfire Bow"
+      lore: ["<gray>Infinite arrows that still mend", "<dark_purple>Rare Merchant exclusive"]
+      cost: 2000
+      enchants: ["power:10", "punch:4", "flame:1", "infinity:1", "unbreaking:10", "mending:1"]
+    banshee_crossbow:
+      material: CROSSBOW
+      name: "<light_purple>Banshee's Scream"
+      lore: ["<gray>Multishot and piercing together", "<dark_purple>Rare Merchant exclusive"]
+      cost: 2300
+      enchants: ["quick_charge:6", "multishot:2", "piercing:6", "unbreaking:10", "mending:1"]
+    soul_harpoon:
+      material: TRIDENT
+      name: "<aqua>Soul Harpoon"
+      lore: ["<gray>Riptide, loyalty and channeling", "<dark_purple>Rare Merchant exclusive"]
+      cost: 2600
+      enchants: ["impaling:10", "loyalty:5", "riptide:5", "channeling:1", "unbreaking:10", "mending:1"]
+    skull_crusher:
+      material: MACE
+      name: "<dark_red>Skull Crusher"
+      lore: ["<gray>Heavy. Very heavy.", "<dark_purple>Rare Merchant exclusive"]
+      cost: 2800
+      enchants: ["density:10", "breach:6", "wind_burst:3", "fire_aspect:3", "unbreaking:10", "mending:1"]
+    cursed_crown:
+      material: NETHERITE_HELMET
+      name: "<dark_purple>Cursed Crown"
+      lore: ["<gray>Heavy is the head", "<dark_purple>Rare Merchant exclusive"]
+      cost: 1800
+      enchants: ["protection:8", "respiration:5", "aqua_affinity:1", "thorns:5", "unbreaking:10", "mending:1"]
+    wraith_chestplate:
+      material: NETHERITE_CHESTPLATE
+      name: "<dark_gray>Wraith Plate"
+      lore: ["<gray>All four protections at once", "<dark_purple>Rare Merchant exclusive"]
+      cost: 3000
+      enchants: ["protection:8", "blast_protection:8", "fire_protection:8", "projectile_protection:8", "thorns:6", "unbreaking:10", "mending:1"]
+    phantom_leggings:
+      material: NETHERITE_LEGGINGS
+      name: "<white>Phantom Greaves"
+      lore: ["<gray>Silent as a ghost", "<dark_purple>Rare Merchant exclusive"]
+      cost: 2400
+      enchants: ["protection:8", "swift_sneak:5", "thorns:5", "unbreaking:10", "mending:1"]
+    ghost_boots:
+      material: NETHERITE_BOOTS
+      name: "<aqua>Ghostwalkers"
+      lore: ["<gray>Walk on water, fall like a feather", "<dark_purple>Rare Merchant exclusive"]
+      cost: 2200
+      enchants: ["protection:8", "feather_falling:10", "depth_strider:5", "frost_walker:3", "soul_speed:5", "unbreaking:10", "mending:1"]
+    turtle_ward:
+      material: TURTLE_HELMET
+      name: "<green>Elder Shell"
+      lore: ["<gray>The sea remembers", "<dark_purple>Rare Merchant exclusive"]
+      cost: 1600
+      enchants: ["protection:7", "respiration:4", "aqua_affinity:1", "unbreaking:8", "mending:1"]
+    shroud_of_night:
+      material: ELYTRA
+      name: "<dark_purple>Shroud of Night"
+      lore: ["<gray>Wings that never tire", "<dark_purple>Rare Merchant exclusive"]
+      cost: 3500
+      enchants: ["unbreaking:10", "mending:1"]
+    bulwark_of_souls:
+      material: SHIELD
+      name: "<gray>Bulwark of Souls"
+      lore: ["<gray>Blocks what shouldn't be blocked", "<dark_purple>Rare Merchant exclusive"]
+      cost: 1200
+      enchants: ["unbreaking:10", "mending:1"]
