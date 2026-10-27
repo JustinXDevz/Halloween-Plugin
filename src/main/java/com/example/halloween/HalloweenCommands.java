@@ -82,6 +82,29 @@ public final class HalloweenCommands implements CommandExecutor, TabCompleter {
                 plugin.trickOrTreat().spawnNpc(p.getLocation(), false);
                 plugin.send(p, "Permanent NPC placed. Remove it with <gold>/halloween npc remove</gold>.");
             }
+            case "shopnpc" -> {
+                if (!(sender instanceof Player p)) { plugin.send(sender, "Players only."); return; }
+                if (args.length > 1 && args[1].equalsIgnoreCase("remove")) {
+                    if (plugin.shopNpcs().removeNearest(p.getLocation(), 5, false)) plugin.send(p, "Removed the nearest Candy Shop NPC.");
+                    else plugin.send(p, "<red>No Candy Shop NPC within 5 blocks.");
+                    return;
+                }
+                plugin.shopNpcs().spawnShopNpc(p.getLocation());
+                plugin.send(p, "Candy Shop NPC placed. Remove it with <gold>/halloween shopnpc remove</gold>.");
+            }
+            case "merchant" -> {
+                if (!(sender instanceof Player p)) { plugin.send(sender, "Players only."); return; }
+                if (args.length > 1 && args[1].equalsIgnoreCase("remove")) {
+                    if (plugin.shopNpcs().removeNearest(p.getLocation(), 5, true)) plugin.send(p, "Removed the nearest Rare Merchant.");
+                    else plugin.send(p, "<red>No Rare Merchant within 5 blocks.");
+                    return;
+                }
+                if (plugin.shopNpcs().spawnMerchant(p.getLocation())) {
+                    plugin.send(p, "A <dark_purple>Rare Merchant</dark_purple> appeared with fresh stock. Summon another for different goods.");
+                } else {
+                    plugin.send(p, "<red>The merchant pool in config.yml is empty or invalid.");
+                }
+            }
             case "pumpkin" -> {
                 if (!(sender instanceof Player p)) { plugin.send(sender, "Players only."); return; }
                 if (args.length > 1 && args[1].equalsIgnoreCase("random")) {
@@ -115,7 +138,7 @@ public final class HalloweenCommands implements CommandExecutor, TabCompleter {
                 plugin.zones().start();
                 plugin.send(sender, "Config reloaded.");
             }
-            default -> plugin.send(sender, "Usage: /halloween [npc|pumpkin|zone|give|reload]");
+            default -> plugin.send(sender, "Usage: /halloween [npc|shopnpc|merchant|pumpkin|zone|give|reload]");
         }
     }
 
@@ -198,11 +221,14 @@ public final class HalloweenCommands implements CommandExecutor, TabCompleter {
         if (args.length == 1) {
             if (name.equals("candy")) return filter(List.of("top"), args[0]);
             if (name.equals("halloween") && sender.hasPermission("halloween.admin")) {
-                return filter(List.of("npc", "pumpkin", "zone", "give", "reload"), args[0]);
+                return filter(List.of("npc", "shopnpc", "merchant", "pumpkin", "zone", "give", "reload"), args[0]);
             }
         }
         if (args.length == 2 && name.equals("halloween") && sender.hasPermission("halloween.admin")) {
-            if (args[0].equalsIgnoreCase("npc")) return filter(List.of("remove"), args[1]);
+            if (args[0].equalsIgnoreCase("npc") || args[0].equalsIgnoreCase("shopnpc")
+                    || args[0].equalsIgnoreCase("merchant")) {
+                return filter(List.of("remove"), args[1]);
+            }
             if (args[0].equalsIgnoreCase("pumpkin")) return filter(List.of("random"), args[1]);
             if (args[0].equalsIgnoreCase("zone")) {
                 return filter(List.of("create", "remove", "list", "infect", "cleanse", "heart"), args[1]);
@@ -219,4 +245,4 @@ public final class HalloweenCommands implements CommandExecutor, TabCompleter {
     private static List<String> filter(List<String> options, String prefix) {
         return options.stream().filter(s -> s.startsWith(prefix.toLowerCase())).toList();
     }
-}
+    }
