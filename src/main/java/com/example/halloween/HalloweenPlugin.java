@@ -19,6 +19,7 @@ public final class HalloweenPlugin extends JavaPlugin {
     private PumpkinHunt pumpkinHunt;
     private TrickOrTreat trickOrTreat;
     private HauntedZones zones;
+    private ShopNpcs shopNpcs;
     private NamespacedKey npcKey;
 
     @Override
@@ -31,12 +32,14 @@ public final class HalloweenPlugin extends JavaPlugin {
         trickOrTreat = new TrickOrTreat(this);
         zones = new HauntedZones(this);
         ShopGUI shop = new ShopGUI(this);
+        shopNpcs = new ShopNpcs(this, shop);
 
         var pm = getServer().getPluginManager();
         pm.registerEvents(pumpkinHunt, this);
         pm.registerEvents(trickOrTreat, this);
         pm.registerEvents(zones, this);
         pm.registerEvents(shop, this);
+        pm.registerEvents(shopNpcs, this);
 
         HalloweenCommands commands = new HalloweenCommands(this, shop);
         for (String name : new String[] {"halloween", "candy", "halloweenshop"}) {
@@ -87,6 +90,7 @@ public final class HalloweenPlugin extends JavaPlugin {
     public PumpkinHunt hunt() { return pumpkinHunt; }
     public TrickOrTreat trickOrTreat() { return trickOrTreat; }
     public HauntedZones zones() { return zones; }
+    public ShopNpcs shopNpcs() { return shopNpcs; }
     public NamespacedKey npcKey() { return npcKey; }
 
     // ---------- Message helpers ----------
