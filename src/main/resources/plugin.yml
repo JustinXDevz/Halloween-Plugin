@@ -2,12 +2,12 @@ name: Halloween
 version: ${project.version}
 main: com.example.halloween.HalloweenPlugin
 api-version: '1.21'
-description: Seasonal Halloween event By Just1n- collect candy, hunt pumpkins, trick-or-treat.
+description: Seasonal Halloween event by Just1n - collect candy, hunt pumpkins, trick-or-treat.
 
 commands:
   halloween:
     description: Halloween event info and admin tools
-    usage: /halloween [npc [remove]|pumpkin [random]|give|reload]
+    usage: /halloween [npc|shopnpc|merchant [remove]|pumpkin [random]|zone|give|reload]
   candy:
     description: Check your candy or view the leaderboard
     usage: /candy [top]
