@@ -18,6 +18,7 @@ public final class HalloweenPlugin extends JavaPlugin {
     private CandyManager candy;
     private PumpkinHunt pumpkinHunt;
     private TrickOrTreat trickOrTreat;
+    private HauntedZones zones;
     private NamespacedKey npcKey;
 
     @Override
@@ -28,11 +29,13 @@ public final class HalloweenPlugin extends JavaPlugin {
         candy = new CandyManager(this);
         pumpkinHunt = new PumpkinHunt(this);
         trickOrTreat = new TrickOrTreat(this);
+        zones = new HauntedZones(this);
         ShopGUI shop = new ShopGUI(this);
 
         var pm = getServer().getPluginManager();
         pm.registerEvents(pumpkinHunt, this);
         pm.registerEvents(trickOrTreat, this);
+        pm.registerEvents(zones, this);
         pm.registerEvents(shop, this);
 
         HalloweenCommands commands = new HalloweenCommands(this, shop);
@@ -46,6 +49,7 @@ public final class HalloweenPlugin extends JavaPlugin {
 
         pumpkinHunt.start();
         trickOrTreat.start();
+        zones.start();
         // Autosave every 5 minutes
         getServer().getScheduler().runTaskTimer(this, candy::save, 6000L, 6000L);
         getLogger().info("Halloween enabled. Event active: " + isEventActive());
@@ -55,6 +59,7 @@ public final class HalloweenPlugin extends JavaPlugin {
     public void onDisable() {
         if (pumpkinHunt != null) pumpkinHunt.clearAll();
         if (trickOrTreat != null) trickOrTreat.clearAuto();
+        if (zones != null) zones.shutdown();
         if (candy != null) candy.save();
     }
 
@@ -81,6 +86,7 @@ public final class HalloweenPlugin extends JavaPlugin {
     public CandyManager candy() { return candy; }
     public PumpkinHunt hunt() { return pumpkinHunt; }
     public TrickOrTreat trickOrTreat() { return trickOrTreat; }
+    public HauntedZones zones() { return zones; }
     public NamespacedKey npcKey() { return npcKey; }
 
     // ---------- Message helpers ----------
@@ -93,4 +99,4 @@ public final class HalloweenPlugin extends JavaPlugin {
     public void send(CommandSender to, String text) {
         to.sendMessage(mm(getConfig().getString("prefix", "") + text));
     }
-              }
+}
