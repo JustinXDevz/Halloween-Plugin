@@ -49,7 +49,9 @@ trick-or-treat:
   candy-min: 3
   candy-max: 8
 
-# Haunted Zones: create with /halloween zone create <name> [radius] (centered on you).
+# Haunted Zones: /halloween zone spawn [radius] (or zone create <name> [radius]) creates one
+# centered on you, with a Cursed Creaking Heart under your feet. The zone spreads until the
+# heart is destroyed; then it is cleansed, deleted, and the land is restored.
 # Inside a zone: fog, spooky sounds, extra mobs and bonus candy.
 haunted-zones:
   default-radius: 30
@@ -60,7 +62,29 @@ haunted-zones:
   mobs: [ZOMBIE, SKELETON, SPIDER, WITCH]
   kill-candy-chance: 0.6       # chance a haunted mob drops candy when a player kills it
   kill-candy-min: 1
-  kill-candy-max: 3
+  kill-candy-max: 3            # candy is multiplied by (1 + the mob's danger level)
+
+  # Zones normally only appear when an admin runs the command. Turn this on to also have
+  # one appear by itself near a random player. Careful: it eats builds until it is cleansed!
+  auto-spawn:
+    enabled: false
+    interval-minutes: 30
+    max-zones: 1               # no new zone while this many exist
+    min-distance: 60           # spawns this far from the chosen player
+    max-distance: 140
+
+  # The Cursed Heart defends itself like a hive: the closer a mob spawns to the heart,
+  # the tougher it is, and more of them come.
+  hive:
+    level-distances: [64, 40, 24, 12]   # within 64 blocks = level 1 ... within 12 = level 4
+    mobs-per-level: 1          # extra mobs per spawn cycle for each level
+    cap-per-level: 3           # extra max mobs for each level
+    darkness: true             # players at level 3+ get the Darkness effect
+    heartbeat-range: 48        # you hear the heart this far away; it beats faster as you approach
+    extra-mobs:                # added to 'mobs' once you are this close
+      level-2: [HUSK, STRAY, CAVE_SPIDER]
+      level-3: [VINDICATOR, WITHER_SKELETON]
+      level-4: [RAVAGER, EVOKER]
 
 # Infection: an infected zone keeps growing and eats the land (natural ground turns
 # cursed, everything else in the top layers is destroyed, builds included) until its
@@ -68,15 +92,16 @@ haunted-zones:
 # Chests, signs, beds and other containers are never touched. When the event ends,
 # every infection is cleansed automatically.
 infection:
-  auto-start: true             # zones start spreading as soon as they are created
+  auto-start: true             # a new zone gets its heart and starts spreading right away
   start-radius: 6
   spread-blocks: 4             # grows by this much...
   spread-interval-seconds: 10  # ...every N seconds
-  max-radius: 100
+  max-radius: 0                # 0 = never stops until the heart is destroyed
   depth: 6                     # how many blocks down from the surface are corrupted
   columns-per-tick: 30         # speed limits that keep the server smooth
   restore-blocks-per-tick: 300
   cleanse-reward: 50           # candy for the player who destroys the heart
+  delete-zone-on-cleanse: true # destroying the heart also deletes the zone
 
 # Each item runs its commands as console when bought. %player% = buyer.
 # Swap in commands from your crate / cosmetics plugins if you have them.
