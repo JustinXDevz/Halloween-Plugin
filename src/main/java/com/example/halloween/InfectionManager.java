@@ -5,6 +5,7 @@ import org.bukkit.HeightMap;
 import org.bukkit.Location;
 import org.bukkit.Material;
 import org.bukkit.Particle;
+import org.bukkit.Sound;
 import org.bukkit.Tag;
 import org.bukkit.World;
 import org.bukkit.block.Block;
@@ -23,6 +24,8 @@ import org.bukkit.event.block.BlockPistonRetractEvent;
 import org.bukkit.event.entity.EntityChangeBlockEvent;
 import org.bukkit.event.entity.EntityExplodeEvent;
 import org.bukkit.event.world.ChunkLoadEvent;
+import org.bukkit.potion.PotionEffect;
+import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitTask;
 
 import java.io.BufferedInputStream;
@@ -49,7 +52,10 @@ import java.util.Set;
  * Infection: an infected haunted zone keeps growing and corrupts the land
  * (natural ground turns cursed, everything else in the top layers is destroyed)
  * until its Cursed Creaking Heart is destroyed. Every changed block is saved to
- * disk, and when the zone is cleansed everything is restored.
+ * disk, and when the zone is cleansed everything is restored (and the zone is deleted).
+ *
+ * The heart also acts like a hive: the closer you get, the tougher the zone's
+ * monsters are (see HauntedZones), with a heartbeat and darkness near it.
  *
  * Chests, signs, beds and other tile-entity blocks are never touched, so no
  * items can be lost.
@@ -98,6 +104,7 @@ public final class InfectionManager implements Listener {
     private final Material heartMat;
     private final Random random = new Random();
     private final Map<String, State> states = new LinkedHashMap<>();
+    private int effectTick = 0;
 
     private BukkitTask workTask;
     private BukkitTask spreadTask;
@@ -170,24 +177,33 @@ public final class InfectionManager implements Listener {
 
     // ---------- Public API ----------
 
-    /** Starts spreading from the zone. Returns false if it is already infected / healing. */
-    public boolean infect(HauntedZones.Zone z) {
+    /**
+     * Starts spreading from the zone. If underFeet is true the Cursed Heart replaces the block
+     * directly under {@code at} (it is restored when the heart is destroyed); otherwise it is
+     * placed on top of the ground at the zone center.
+     * Returns false if the zone is already infected / healing.
+     */
+    public boolean infect(HauntedZones.Zone z, Location at, boolean underFeet) {
         if (states.containsKey(z.name())) return false;
         World w = Bukkit.getWorld(z.world());
         if (w == null) return false;
 
         State st = new State(z.name(), z.world(), z.x(), z.z());
         st.radius = Math.max(1, cfg().getInt("infection.start-radius", 6));
-        placeHeart(st, z, w);
+
+        boolean placed = underFeet && at != null && placeHeartUnder(st, at);
+        if (!placed) placeHeart(st, z, w);
+
         states.put(st.zone, st);
         z.setRadius(Math.max(z.baseRadius(), st.radius));
         enqueueRing(st, w, -1, st.radius);
         st.dirty = true;
         save();
 
-        broadcast("<dark_purple>The haunted zone <gold>" + z.name() + "</gold> <red>is spreading</red> near <white>"
-                + z.x() + ", " + z.z() + "</white>! Destroy its <light_purple>Cursed Creaking Heart</light_purple>"
-                + " to stop it. Everything it ate comes back once it's gone.");
+        broadcast("<dark_purple>A <light_purple>Cursed Creaking Heart</light_purple> has awakened near <white>"
+                + z.x() + ", " + z.z() + "</white> and the haunted zone <gold>" + z.name()
+                + "</gold> <red>is spreading</red>! Destroy the heart to stop it. "
+                + "The closer you get, the more its monsters defend it.");
         return true;
     }
 
@@ -206,11 +222,38 @@ public final class InfectionManager implements Listener {
         return "healing (" + st.changes.size() + " blocks left)";
     }
 
+    public List<String> stateNames() {
+        return new ArrayList<>(states.keySet());
+    }
+
     /** {x, y, z} of the Cursed Heart, or null. */
     public int[] heartPos(String zone) {
         State st = states.get(zone);
         if (st == null || !st.spreading || !st.hasHeart) return null;
         return new int[] {st.hx, st.hy, st.hz};
+    }
+
+    /**
+     * Danger level at a location: 0 = far from the heart, higher = closer.
+     * Thresholds come from haunted-zones.hive.level-distances.
+     */
+    public int levelAt(String zone, Location loc) {
+        State st = states.get(zone);
+        if (st == null || !st.spreading || !st.hasHeart) return 0;
+        if (loc.getWorld() == null || !loc.getWorld().getName().equals(st.world)) return 0;
+
+        double dx = loc.getX() - (st.hx + 0.5);
+        double dy = loc.getY() - (st.hy + 0.5);
+        double dz = loc.getZ() - (st.hz + 0.5);
+        double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+
+        List<Integer> distances = cfg().getIntegerList("haunted-zones.hive.level-distances");
+        if (distances.isEmpty()) distances = List.of(64, 40, 24, 12);
+        int level = 0;
+        for (int d : distances) {
+            if (dist <= d) level++;
+        }
+        return level;
     }
 
     /** Action-bar hint for players standing in an infected zone. */
@@ -227,7 +270,8 @@ public final class InfectionManager implements Listener {
         double dz = st.hz + 0.5 - l.getZ();
         int dist = (int) Math.round(Math.sqrt(dx * dx + dz * dz));
         p.sendActionBar(HalloweenPlugin.mm("<dark_purple>Infection <red>" + st.radius + "m <dark_gray>| "
-                + "<light_purple>Cursed Heart <white>" + dist + "m " + compass(dx, dz)));
+                + "<light_purple>Heart <white>" + dist + "m " + compass(dx, dz)
+                + " <dark_gray>| <red>Danger " + levelAt(zone, l)));
     }
 
     private static String compass(double dx, double dz) {
@@ -243,18 +287,36 @@ public final class InfectionManager implements Listener {
 
     // ---------- The heart ----------
 
+    /** Heart replaces the block under the player; the original block is saved and comes back later. */
+    private boolean placeHeartUnder(State st, Location at) {
+        Block under = at.getBlock().getRelative(BlockFace.DOWN);
+        for (int i = 0; i < 8 && under.getType().isAir(); i++) {
+            under = under.getRelative(BlockFace.DOWN);
+        }
+        if (under.getType().isAir() || isProtected(under.getType())) return false;
+        if (under.getState(false) instanceof TileState) return false;   // never overwrite chests, signs...
+
+        record(st, under);
+        under.setType(heartMat, false);
+        st.hasHeart = true;
+        st.hx = under.getX();
+        st.hy = under.getY();
+        st.hz = under.getZ();
+        return true;
+    }
+
+    /** Heart on top of the ground: zone center first, then random spots nearby. */
     private void placeHeart(State st, HauntedZones.Zone z, World w) {
+        if (tryHeart(st, w, z.x(), z.z())) return;
         for (int i = 0; i < 60; i++) {
             double angle = random.nextDouble() * Math.PI * 2;
-            double dist = z.baseRadius() * (0.4 + random.nextDouble() * 0.4);
+            double dist = z.baseRadius() * (0.1 + random.nextDouble() * 0.6);
             int x = z.x() + (int) Math.round(Math.cos(angle) * dist);
             int zz = z.z() + (int) Math.round(Math.sin(angle) * dist);
             if (tryHeart(st, w, x, zz)) return;
         }
-        if (!tryHeart(st, w, z.x(), z.z())) {
-            plugin.getLogger().warning("Could not place a Cursed Heart for zone " + z.name()
-                    + ". Use /halloween zone cleanse " + z.name() + " to stop it.");
-        }
+        plugin.getLogger().warning("Could not place a Cursed Heart for zone " + z.name()
+                + ". Use /halloween zone cleanse " + z.name() + " to stop it.");
     }
 
     /** Only ever uses an empty air block on top of solid ground. */
@@ -299,7 +361,7 @@ public final class InfectionManager implements Listener {
     private void spread() {
         boolean active = plugin.isEventActive();
         int step = Math.max(1, cfg().getInt("infection.spread-blocks", 4));
-        int max = Math.max(10, cfg().getInt("infection.max-radius", 100));
+        int max = cfg().getInt("infection.max-radius", 0);   // 0 = never stops
 
         for (State st : new ArrayList<>(states.values())) {
             if (!st.spreading) continue;
@@ -310,10 +372,11 @@ public final class InfectionManager implements Listener {
                 beginRestore(st, null);
                 continue;
             }
-            if (st.radius >= max) continue;
+            if (max > 0 && st.radius >= max) continue;
 
             int old = st.radius;
-            st.radius = Math.min(max, old + step);
+            st.radius = old + step;
+            if (max > 0) st.radius = Math.min(max, st.radius);
             st.dirty = true;
             HauntedZones.Zone z = zones.get(st.zone);
             if (z != null) z.setRadius(Math.max(z.baseRadius(), st.radius));
@@ -321,21 +384,33 @@ public final class InfectionManager implements Listener {
         }
     }
 
-    /** Queues every column with oldR < distance <= newR from the zone center. */
+    /** Queues every column with oldR < distance <= newR from the zone center (ring only, so it stays fast). */
     private void enqueueRing(State st, World w, int oldR, int newR) {
-        long inner = oldR < 0 ? -1 : (long) oldR * oldR;
         long outer = (long) newR * newR;
+        long inner = oldR < 0 ? -1 : (long) oldR * oldR;
         for (int dx = -newR; dx <= newR; dx++) {
-            for (int dz = -newR; dz <= newR; dz++) {
-                long d2 = (long) dx * dx + (long) dz * dz;
-                if (d2 <= inner || d2 > outer) continue;
-                int x = st.cx + dx;
-                int z = st.cz + dz;
-                if (!w.isChunkLoaded(x >> 4, z >> 4)) continue;   // handled by ChunkLoadEvent later
-                long ck = colKey(x, z);
-                if (!st.done.contains(ck)) st.pending.add(ck);
+            long dx2 = (long) dx * dx;
+            int outerZ = isqrt(outer - dx2);
+            int innerZ = (oldR >= 0 && dx2 <= inner) ? isqrt(inner - dx2) : -1;
+            for (int dz = innerZ + 1; dz <= outerZ; dz++) {
+                addColumn(st, w, st.cx + dx, st.cz + dz);
+                if (dz != 0) addColumn(st, w, st.cx + dx, st.cz - dz);
             }
         }
+    }
+
+    private static int isqrt(long n) {
+        if (n < 0) return -1;
+        long r = (long) Math.sqrt((double) n);
+        while (r * r > n) r--;
+        while ((r + 1) * (r + 1) <= n) r++;
+        return (int) r;
+    }
+
+    private void addColumn(State st, World w, int x, int z) {
+        if (!w.isChunkLoaded(x >> 4, z >> 4)) return;   // handled by ChunkLoadEvent later
+        long ck = colKey(x, z);
+        if (!st.done.contains(ck)) st.pending.add(ck);
     }
 
     /** Queues the not-yet-infected columns of a chunk that are inside the infection. */
@@ -452,14 +527,19 @@ public final class InfectionManager implements Listener {
         World w = Bukkit.getWorld(st.world);
         if (w != null) removeHeart(st, w);
 
-        HauntedZones.Zone z = zones.get(st.zone);
-        if (z != null) z.setRadius(z.baseRadius());
+        // The zone itself is deleted; the land keeps healing in the background
+        if (cfg().getBoolean("infection.delete-zone-on-cleanse", true)) {
+            zones.dropZone(st.zone);
+        } else {
+            HauntedZones.Zone z = zones.get(st.zone);
+            if (z != null) z.setRadius(z.baseRadius());
+        }
 
         if (by != null) {
             int reward = Math.max(0, cfg().getInt("infection.cleanse-reward", 50));
             if (reward > 0) plugin.candy().give(by, reward);
             broadcast("<green>" + by.getName() + "</green> destroyed the <light_purple>Cursed Heart</light_purple> of <gold>"
-                    + st.zone + "</gold>! The land is healing... <gray>(+" + reward + " candy)");
+                    + st.zone + "</gold>! The haunted zone is gone and the land is healing... <gray>(+" + reward + " candy)");
         } else {
             broadcast("The haunted zone <gold>" + st.zone + "</gold> has been cleansed. The land is healing...");
         }
@@ -516,17 +596,37 @@ public final class InfectionManager implements Listener {
         plugin.getLogger().info("Haunted zone " + st.zone + " has been fully restored.");
     }
 
-    // ---------- Visuals ----------
+    // ---------- Visuals and hive atmosphere ----------
 
     private void effects() {
+        effectTick++;
+        boolean darkness = cfg().getBoolean("haunted-zones.hive.darkness", true);
+        double range = Math.max(8, cfg().getDouble("haunted-zones.hive.heartbeat-range", 48));
+
         for (State st : states.values()) {
             if (!st.spreading || !st.hasHeart) continue;
             World w = Bukkit.getWorld(st.world);
             if (w == null || !w.isChunkLoaded(st.hx >> 4, st.hz >> 4)) continue;
+
             Location c = new Location(w, st.hx + 0.5, st.hy + 0.5, st.hz + 0.5);
             w.spawnParticle(Particle.SOUL_FIRE_FLAME, c, 6, 0.4, 0.4, 0.4, 0.02);
+            w.spawnParticle(Particle.SCULK_SOUL, c, 4, 0.6, 0.6, 0.6, 0.02);
             for (int i = 2; i <= 14; i += 3) {
                 w.spawnParticle(Particle.END_ROD, c.getX(), c.getY() + i, c.getZ(), 1, 0.05, 0.2, 0.05, 0.0);
+            }
+
+            for (Player p : w.getPlayers()) {
+                double dist = p.getLocation().distance(c);
+                if (dist > range) continue;
+
+                // The nearer you are, the faster the heart beats
+                int every = 1 + (int) (dist / 12);
+                if (effectTick % every == 0) {
+                    p.playSound(p.getLocation(), Sound.ENTITY_WARDEN_HEARTBEAT, 1f, 0.9f);
+                }
+                if (darkness && levelAt(st.zone, p.getLocation()) >= 3) {
+                    p.addPotionEffect(new PotionEffect(PotionEffectType.DARKNESS, 60, 0, false, false));
+                }
             }
         }
     }
@@ -728,4 +828,4 @@ public final class InfectionManager implements Listener {
     private static long chunkKey(int cx, int cz) {
         return ((long) cx << 32) | (cz & 0xFFFFFFFFL);
     }
-}
+            }
