@@ -1,3 +1,6 @@
+# Do not change - the plugin uses this to upgrade old config files automatically.
+config-version: 4
+
 # Chat prefix (MiniMessage format)
 prefix: "<gold>Halloween <dark_gray>» <gray>"
 
@@ -49,10 +52,11 @@ trick-or-treat:
   candy-min: 3
   candy-max: 8
 
-# Haunted Zones: /halloween zone spawn [radius] (or zone create <name> [radius]) creates one
-# centered on you, with a Cursed Creaking Heart under your feet. The zone spreads until the
-# heart is destroyed; then it is cleansed, deleted, and the land is restored.
-# Inside a zone: fog, spooky sounds, extra mobs and bonus candy.
+# Haunted Zones: they appear by themselves (auto-spawn below) AND with a command:
+# /halloween zone spawn [radius]  (or zone create <name> [radius]).
+# A zone is centered on you with a Cursed Creaking Heart under your feet. It spreads until
+# the heart is destroyed; then it is cleansed, deleted, and the land is restored.
+# Inside an infected zone: ash fog, spooky sounds, monsters and bonus candy.
 haunted-zones:
   default-radius: 30
   candy-multiplier: 2          # pumpkin + trick-or-treat candy is multiplied inside zones
@@ -64,33 +68,47 @@ haunted-zones:
   kill-candy-min: 1
   kill-candy-max: 3            # candy is multiplied by (1 + the mob's danger level)
 
-  # Zones normally only appear when an admin runs the command. Turn this on to also have
-  # one appear by itself near a random player. Careful: it eats builds until it is cleansed!
+  # Zones also appear by themselves near a random player. Careful: an infected zone eats builds
+  # until its heart is destroyed! Set enabled: false to only use the command.
   auto-spawn:
-    enabled: false
-    interval-minutes: 30
+    enabled: true
+    first-delay-minutes: 5     # first zone appears this long after the server starts
+    interval-minutes: 30       # then a new one this often (if there's room)
     max-zones: 1               # no new zone while this many exist
     min-distance: 60           # spawns this far from the chosen player
     max-distance: 140
+    avoid-spawn-radius: 250    # never within this many blocks of world spawn
 
-  # The Cursed Heart defends itself like a hive: the closer a mob spawns to the heart,
-  # the tougher it is, and more of them come.
+  # The Cursed Heart is a hive. The closer you get, the harder it gets.
   hive:
-    level-distances: [64, 40, 24, 12]   # within 64 blocks = level 1 ... within 12 = level 4
-    mobs-per-level: 1          # extra mobs per spawn cycle for each level
-    cap-per-level: 3           # extra max mobs for each level
-    darkness: true             # players at level 3+ get the Darkness effect
-    heartbeat-range: 48        # you hear the heart this far away; it beats faster as you approach
+    # Level 1..5 by distance to the heart. Mob buffs, extra mob types and the aura below scale with it.
+    level-distances: [80, 52, 32, 18, 8]
+    mobs-per-level: 2          # extra mobs per spawn cycle for each level
+    cap-per-level: 4           # extra max mobs for each level
     extra-mobs:                # added to 'mobs' once you are this close
       level-2: [HUSK, STRAY, CAVE_SPIDER]
-      level-3: [VINDICATOR, WITHER_SKELETON]
-      level-4: [RAVAGER, EVOKER]
+      level-3: [VINDICATOR, WITHER_SKELETON, PILLAGER]
+      level-4: [RAVAGER, EVOKER, BREEZE]
+      level-5: [RAVAGER, EVOKER, ILLUSIONER]
+    # Elite guardians that keep standing around the heart (they respawn)
+    sentries: 5
+    sentry-range: 56           # sentries respawn while a player is this close
+    sentry-mobs: [VINDICATOR, WITHER_SKELETON, RAVAGER, EVOKER]
+    # Alarm: reaching this level makes the hive swarm you with guardians (0 = off)
+    alarm-level: 4
+    alarm-mobs: 6
+    alarm-cooldown-seconds: 30
+    # Aura on players near the heart (0 = off)
+    darkness: true             # Darkness at level 3+
+    slowness-level: 4          # Slowness from this level
+    weakness-level: 5          # Weakness from this level
+    heartbeat-range: 48        # you hear the heart this far away; it beats faster as you approach
 
 # Infection: an infected zone keeps growing and eats the land (natural ground turns
 # cursed, everything else in the top layers is destroyed, builds included) until its
-# Cursed Creaking Heart is destroyed. Everything it changed is then restored.
-# Chests, signs, beds and other containers are never touched. When the event ends,
-# every infection is cleansed automatically.
+# Cursed Creaking Heart is destroyed. Pale trees grow over the dead land. Everything it
+# changed (trees too) is then restored. Chests, signs, beds and other containers are never
+# touched. When the event ends, every infection is cleansed automatically.
 infection:
   auto-start: true             # a new zone gets its heart and starts spreading right away
   start-radius: 6
@@ -102,6 +120,13 @@ infection:
   restore-blocks-per-tick: 300
   cleanse-reward: 50           # candy for the player who destroys the heart
   delete-zone-on-cleanse: true # destroying the heart also deletes the zone
+  # Pale oak trees slowly grow over the infected area (placed only into empty air)
+  trees:
+    enabled: true
+    chance: 0.02               # chance per infected column (0.02 = about one tree per 50 blocks)
+    min-height: 4
+    max-height: 7
+    blocks-per-tick: 40        # growth speed
 
 # Each item runs its commands as console when bought. %player% = buyer.
 # Swap in commands from your crate / cosmetics plugins if you have them.
