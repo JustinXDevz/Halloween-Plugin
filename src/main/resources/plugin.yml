@@ -7,7 +7,7 @@ description: Seasonal Halloween event by Just1n - collect candy, hunt pumpkins, 
 commands:
   halloween:
     description: Halloween event info and admin tools
-    usage: /halloween [npc|shopnpc|merchant [remove]|pumpkin [random]|zone|give|reload]
+    usage: /halloween [npc|shopnpc|merchant [remove]|pumpkin [random]|zone [spawn]|give|reload]
   candy:
     description: Check your candy or view the leaderboard
     usage: /candy [top]
