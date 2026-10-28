@@ -1,6 +1,7 @@
 package com.example.halloween;
 
 import org.bukkit.Bukkit;
+import org.bukkit.GameMode;
 import org.bukkit.HeightMap;
 import org.bukkit.Location;
 import org.bukkit.Material;
@@ -11,6 +12,8 @@ import org.bukkit.World;
 import org.bukkit.block.Block;
 import org.bukkit.block.BlockFace;
 import org.bukkit.block.TileState;
+import org.bukkit.block.data.BlockData;
+import org.bukkit.block.data.type.Leaves;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
@@ -51,11 +54,12 @@ import java.util.Set;
 /**
  * Infection: an infected haunted zone keeps growing and corrupts the land
  * (natural ground turns cursed, everything else in the top layers is destroyed)
- * until its Cursed Creaking Heart is destroyed. Every changed block is saved to
- * disk, and when the zone is cleansed everything is restored (and the zone is deleted).
+ * until its Cursed Creaking Heart is destroyed. Pale trees then grow over the
+ * dead land. Every changed block is saved to disk, and when the zone is cleansed
+ * everything is restored (and the zone is deleted).
  *
  * The heart also acts like a hive: the closer you get, the tougher the zone's
- * monsters are (see HauntedZones), with a heartbeat and darkness near it.
+ * monsters are (see HauntedZones), with a heartbeat, darkness and slowness near it.
  *
  * Chests, signs, beds and other tile-entity blocks are never touched, so no
  * items can be lost.
@@ -63,6 +67,9 @@ import java.util.Set;
 public final class InfectionManager implements Listener {
 
     private static final int FILE_VERSION = 1;
+
+    /** One block of a growing pale tree. */
+    private record Plant(int x, int y, int z, BlockData data) {}
 
     /** Everything we know about one zone's infection. */
     private static final class State {
@@ -87,6 +94,8 @@ public final class InfectionManager implements Listener {
         final ArrayDeque<Long> pending = new ArrayDeque<>();        // columns waiting to be infected
         final ArrayDeque<Long> restoreQueue = new ArrayDeque<>();   // block keys waiting to be restored
         final Map<Long, List<Long>> deferred = new HashMap<>();     // chunk key -> block keys (chunk unloaded)
+        final ArrayDeque<Plant> growQueue = new ArrayDeque<>();     // pale tree blocks waiting to grow
+        final Set<Long> treeColumns = new HashSet<>();              // where trees were planted
         boolean dirty;
 
         State(String zone, String world, int cx, int cz) {
@@ -102,6 +111,10 @@ public final class InfectionManager implements Listener {
     private final File dataFile;
     private final File dir;
     private final Material heartMat;
+    private final Material paleLog;
+    private final Material paleLeaves;
+    private final Material paleCarpet;
+    private final Material paleHanging;
     private final Random random = new Random();
     private final Map<String, State> states = new LinkedHashMap<>();
     private int effectTick = 0;
@@ -117,12 +130,25 @@ public final class InfectionManager implements Listener {
         this.dataFile = new File(plugin.getDataFolder(), "infection.yml");
         this.dir = new File(plugin.getDataFolder(), "infection");
         this.heartMat = resolveHeart();
+        // Pale oak (1.21.4+); older servers fall back to dark oak for the logs and leaves
+        this.paleLog = firstMaterial("PALE_OAK_LOG", "DARK_OAK_LOG");
+        this.paleLeaves = firstMaterial("PALE_OAK_LEAVES", "DARK_OAK_LEAVES");
+        this.paleCarpet = firstMaterial("PALE_MOSS_CARPET");
+        this.paleHanging = firstMaterial("PALE_HANGING_MOSS");
         dir.mkdirs();
         load();
     }
 
     private FileConfiguration cfg() {
         return plugin.getConfig();
+    }
+
+    private static Material firstMaterial(String... names) {
+        for (String n : names) {
+            Material m = Material.matchMaterial(n);
+            if (m != null) return m;
+        }
+        return null;
     }
 
     private Material resolveHeart() {
@@ -234,7 +260,7 @@ public final class InfectionManager implements Listener {
     }
 
     /**
-     * Danger level at a location: 0 = far from the heart, higher = closer.
+     * Danger level at a location: 0 = far from the heart, higher = closer (up to 5 by default).
      * Thresholds come from haunted-zones.hive.level-distances.
      */
     public int levelAt(String zone, Location loc) {
@@ -248,7 +274,7 @@ public final class InfectionManager implements Listener {
         double dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
 
         List<Integer> distances = cfg().getIntegerList("haunted-zones.hive.level-distances");
-        if (distances.isEmpty()) distances = List.of(64, 40, 24, 12);
+        if (distances.isEmpty()) distances = List.of(80, 52, 32, 18, 8);
         int level = 0;
         for (int d : distances) {
             if (dist <= d) level++;
@@ -433,6 +459,7 @@ public final class InfectionManager implements Listener {
     private void work() {
         int columns = Math.max(1, cfg().getInt("infection.columns-per-tick", 30));
         int blocks = Math.max(1, cfg().getInt("infection.restore-blocks-per-tick", 300));
+        int grow = Math.max(1, cfg().getInt("infection.trees.blocks-per-tick", 40));
 
         for (State st : new ArrayList<>(states.values())) {
             World w = Bukkit.getWorld(st.world);
@@ -440,6 +467,9 @@ public final class InfectionManager implements Listener {
             if (st.spreading) {
                 for (int i = 0; i < columns && !st.pending.isEmpty(); i++) {
                     processColumn(st, w, st.pending.poll());
+                }
+                for (int i = 0; i < grow && !st.growQueue.isEmpty(); i++) {
+                    placePlant(st, w, st.growQueue.poll());
                 }
             } else {
                 restoreSome(st, w, blocks);
@@ -454,14 +484,35 @@ public final class InfectionManager implements Listener {
         if (!st.done.add(ck)) return;                    // already infected
         st.dirty = true;
 
-        int top = w.getHighestBlockYAt(x, z, HeightMap.WORLD_SURFACE);
-        if (w.getBlockAt(x, top, z).isLiquid()) return;  // lakes and oceans stay clean
+        int y = w.getHighestBlockYAt(x, z, HeightMap.WORLD_SURFACE);
+        if (w.getBlockAt(x, y, z).isLiquid()) return;    // lakes and oceans stay clean
 
+        // Walk down through tree canopies: leaves are destroyed, pale trees are left alone
+        int limit = Math.max(w.getMinHeight(), y - 48);
+        while (y > limit) {
+            Block b = w.getBlockAt(x, y, z);
+            Material m = b.getType();
+            if (m.isAir() || isPale(m)) {
+                y--;
+                continue;
+            }
+            if (Tag.LEAVES.isTagged(m)) {
+                corrupt(st, b);
+                y--;
+                continue;
+            }
+            break;
+        }
+        if (w.getBlockAt(x, y, z).isLiquid()) return;
+
+        int top = y;
         int depth = Math.max(1, cfg().getInt("infection.depth", 6));
         int bottom = Math.max(w.getMinHeight(), top - depth + 1);
-        for (int y = top; y >= bottom; y--) {
-            corrupt(st, w.getBlockAt(x, y, z));
+        for (int yy = top; yy >= bottom; yy--) {
+            corrupt(st, w.getBlockAt(x, yy, z));
         }
+
+        maybePlantTree(st, w, x, z, top);
     }
 
     private void corrupt(State st, Block b) {
@@ -489,8 +540,15 @@ public final class InfectionManager implements Listener {
         st.dirty = true;
     }
 
+    /** Pale trees and moss belong to the infection and are never destroyed by it. */
+    private boolean isPale(Material m) {
+        return m == paleLog || m == paleLeaves || m == paleCarpet || m == paleHanging
+                || m.name().startsWith("PALE_");
+    }
+
     /** Cursed version of natural ground, or null if the block should simply be destroyed. */
-    private static Material cursedFor(Material m) {
+    private Material cursedFor(Material m) {
+        if (isPale(m)) return m;
         if (m == Material.SOUL_SOIL || m == Material.SOUL_SAND || m == Material.BLACKSTONE) return m;
         if (Tag.DIRT.isTagged(m) || m == Material.FARMLAND || m == Material.DIRT_PATH) return Material.SOUL_SOIL;
         if (Tag.SAND.isTagged(m)) return Material.SOUL_SAND;
@@ -513,11 +571,117 @@ public final class InfectionManager implements Listener {
         };
     }
 
+    // ---------- Pale trees ----------
+
+    /** Sometimes grows a pale tree on freshly corrupted ground. Trees are only ever placed into empty air. */
+    private void maybePlantTree(State st, World w, int x, int z, int top) {
+        if (!cfg().getBoolean("infection.trees.enabled", true) || paleLog == null || paleLeaves == null) return;
+        if (random.nextDouble() >= cfg().getDouble("infection.trees.chance", 0.02)) return;
+        if (st.hasHeart && Math.abs(x - st.hx) <= 3 && Math.abs(z - st.hz) <= 3) return;
+
+        // The ground must be cursed ground (so trees only grow inside the infection)
+        Block ground = w.getBlockAt(x, top, z);
+        for (int i = 0; i < 7 && !ground.getType().isSolid(); i++) {
+            ground = ground.getRelative(BlockFace.DOWN);
+        }
+        Material gm = ground.getType();
+        if (gm != Material.SOUL_SOIL && gm != Material.SOUL_SAND && gm != Material.BLACKSTONE) return;
+
+        // Keep trees apart
+        for (int dx = -3; dx <= 3; dx++) {
+            for (int dz = -3; dz <= 3; dz++) {
+                if (st.treeColumns.contains(colKey(x + dx, z + dz))) return;
+            }
+        }
+
+        int minH = Math.max(3, cfg().getInt("infection.trees.min-height", 4));
+        int maxH = Math.max(minH, cfg().getInt("infection.trees.max-height", 7));
+        int h = minH + random.nextInt(maxH - minH + 1);
+        int baseY = ground.getY() + 1;
+        if (baseY + h + 3 >= w.getMaxHeight()) return;
+        for (int i = 0; i < h + 2; i++) {
+            if (!w.getBlockAt(x, baseY + i, z).getType().isAir()) return;   // trunk space must be free
+        }
+
+        st.treeColumns.add(colKey(x, z));
+        planTree(st, x, baseY, z, h);
+    }
+
+    /** Builds the list of blocks of one tree, bottom to top, so it visibly grows. */
+    private void planTree(State st, int x, int baseY, int z, int h) {
+        Set<Long> used = new HashSet<>();
+        BlockData log = paleLog.createBlockData();
+        BlockData leaf = paleLeaves.createBlockData();
+        if (leaf instanceof Leaves lv) lv.setPersistent(true);   // never decay
+
+        // Moss carpet around the base
+        if (paleCarpet != null) {
+            BlockData carpet = paleCarpet.createBlockData();
+            for (int dx = -2; dx <= 2; dx++) {
+                for (int dz = -2; dz <= 2; dz++) {
+                    if ((dx != 0 || dz != 0) && dx * dx + dz * dz <= 5 && random.nextDouble() < 0.45) {
+                        addPlant(st, used, x + dx, baseY, z + dz, carpet);
+                    }
+                }
+            }
+        }
+
+        // Trunk
+        for (int i = 0; i < h; i++) {
+            addPlant(st, used, x, baseY + i, z, log);
+        }
+
+        // Canopy: four layers, widest in the middle
+        int[] layers = {h - 2, h - 1, h, h + 1};
+        int[] radii = {2, 3, 2, 1};
+        for (int li = 0; li < layers.length; li++) {
+            int y = baseY + layers[li];
+            int r = radii[li];
+            for (int dx = -r; dx <= r; dx++) {
+                for (int dz = -r; dz <= r; dz++) {
+                    if (dx * dx + dz * dz > r * r + 1) continue;
+                    if (dx == 0 && dz == 0 && layers[li] < h) continue;                         // trunk
+                    if (Math.abs(dx) == r && Math.abs(dz) == r && random.nextBoolean()) continue; // ragged corners
+                    addPlant(st, used, x + dx, y, z + dz, leaf);
+                }
+            }
+        }
+
+        // Hanging moss under the canopy
+        if (paleHanging != null) {
+            BlockData moss = paleHanging.createBlockData();
+            for (int dx = -3; dx <= 3; dx++) {
+                for (int dz = -3; dz <= 3; dz++) {
+                    if (dx == 0 && dz == 0) continue;
+                    boolean leafAbove = used.contains(blockKey(x + dx, baseY + h - 2, z + dz));
+                    boolean freeBelow = !used.contains(blockKey(x + dx, baseY + h - 3, z + dz));
+                    if (leafAbove && freeBelow && random.nextDouble() < 0.3) {
+                        addPlant(st, used, x + dx, baseY + h - 3, z + dz, moss);
+                    }
+                }
+            }
+        }
+    }
+
+    private void addPlant(State st, Set<Long> used, int x, int y, int z, BlockData data) {
+        if (used.add(blockKey(x, y, z))) st.growQueue.add(new Plant(x, y, z, data));
+    }
+
+    private void placePlant(State st, World w, Plant p) {
+        if (!w.isChunkLoaded(p.x() >> 4, p.z() >> 4)) return;
+        Block b = w.getBlockAt(p.x(), p.y(), p.z());
+        if (!b.getType().isAir()) return;   // only empty air - never replaces anything
+        record(st, b);                      // so it is removed again when the zone is cleansed
+        b.setBlockData(p.data(), false);
+    }
+
     // ---------- Restoring ----------
 
     private void beginRestore(State st, Player by) {
         st.spreading = false;
         st.pending.clear();
+        st.growQueue.clear();
+        st.treeColumns.clear();
         st.done.clear();
         st.deferred.clear();
         st.restoreQueue.clear();
@@ -601,6 +765,8 @@ public final class InfectionManager implements Listener {
     private void effects() {
         effectTick++;
         boolean darkness = cfg().getBoolean("haunted-zones.hive.darkness", true);
+        int slowAt = cfg().getInt("haunted-zones.hive.slowness-level", 4);
+        int weakAt = cfg().getInt("haunted-zones.hive.weakness-level", 5);
         double range = Math.max(8, cfg().getDouble("haunted-zones.hive.heartbeat-range", 48));
 
         for (State st : states.values()) {
@@ -624,8 +790,19 @@ public final class InfectionManager implements Listener {
                 if (effectTick % every == 0) {
                     p.playSound(p.getLocation(), Sound.ENTITY_WARDEN_HEARTBEAT, 1f, 0.9f);
                 }
-                if (darkness && levelAt(st.zone, p.getLocation()) >= 3) {
+
+                GameMode gm = p.getGameMode();
+                if (gm != GameMode.SURVIVAL && gm != GameMode.ADVENTURE) continue;
+                int level = levelAt(st.zone, p.getLocation());
+                // The hive's aura makes it harder to get close
+                if (darkness && level >= 3) {
                     p.addPotionEffect(new PotionEffect(PotionEffectType.DARKNESS, 60, 0, false, false));
+                }
+                if (slowAt > 0 && level >= slowAt) {
+                    p.addPotionEffect(new PotionEffect(PotionEffectType.SLOWNESS, 60, 0, false, false));
+                }
+                if (weakAt > 0 && level >= weakAt) {
+                    p.addPotionEffect(new PotionEffect(PotionEffectType.WEAKNESS, 60, 0, false, false));
                 }
             }
         }
