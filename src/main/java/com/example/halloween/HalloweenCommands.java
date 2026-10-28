@@ -164,11 +164,25 @@ public final class HalloweenCommands implements CommandExecutor, TabCompleter {
                 }
                 radius = Math.max(5, Math.min(200, radius));
                 if (plugin.zones().add(name, p.getLocation(), radius)) {
-                    plugin.send(p, "Haunted zone <gold>" + name + "</gold> created here (radius " + radius + ")."
-                            + (plugin.zones().status(name).equals("clean") ? "" : " <red>It is already spreading!"));
+                    announceZone(p, name, radius);
                 } else {
                     plugin.send(p, "<red>A zone with that name already exists.");
                 }
+            }
+            case "spawn" -> {
+                if (!(sender instanceof Player p)) { plugin.send(sender, "Players only."); return; }
+                int radius = plugin.getConfig().getInt("haunted-zones.default-radius", 30);
+                if (args.length > 2) {
+                    try {
+                        radius = Integer.parseInt(args[2]);
+                    } catch (NumberFormatException ex) {
+                        plugin.send(p, "<red>Radius must be a number.");
+                        return;
+                    }
+                }
+                radius = Math.max(5, Math.min(200, radius));
+                String name = plugin.zones().nextName();
+                if (plugin.zones().add(name, p.getLocation(), radius)) announceZone(p, name, radius);
             }
             case "remove" -> {
                 if (args.length < 3) { plugin.send(sender, "Usage: /halloween zone remove <name>"); return; }
@@ -185,6 +199,9 @@ public final class HalloweenCommands implements CommandExecutor, TabCompleter {
                             + z.x() + ", " + z.z() + " (radius " + z.baseRadius() + ") <dark_gray>["
                             + plugin.zones().status(z.name()) + "]");
                 }
+                for (String line : plugin.zones().orphanStatuses()) {
+                    plugin.send(sender, "<gold>" + line + " <gray>(zone deleted, land still healing)");
+                }
             }
             case "infect" -> {
                 if (args.length < 3) { plugin.send(sender, "Usage: /halloween zone infect <name>"); return; }
@@ -194,13 +211,13 @@ public final class HalloweenCommands implements CommandExecutor, TabCompleter {
                     plugin.send(sender, "<red>The event isn't active. Set event.always-active: true in config.yml to test.");
                     return;
                 }
-                if (plugin.zones().infect(name)) plugin.send(sender, "Infection started in <gold>" + name + "</gold>.");
+                if (plugin.zones().infect(name)) plugin.send(sender, "Infection started in <gold>" + name + "</gold>. The heart is on the ground at its center.");
                 else plugin.send(sender, "<red>That zone is already infected or still healing.");
             }
             case "cleanse" -> {
                 if (args.length < 3) { plugin.send(sender, "Usage: /halloween zone cleanse <name>"); return; }
                 if (plugin.zones().cleanse(args[2].toLowerCase())) {
-                    plugin.send(sender, "Cleansed. The land is being restored.");
+                    plugin.send(sender, "Cleansed. The zone is deleted and the land is being restored.");
                 } else {
                     plugin.send(sender, "<red>That zone isn't infected.");
                 }
@@ -211,7 +228,19 @@ public final class HalloweenCommands implements CommandExecutor, TabCompleter {
                 if (h == null) plugin.send(sender, "<red>No active Cursed Heart for that zone.");
                 else plugin.send(sender, "Cursed Heart at <white>" + h[0] + ", " + h[1] + ", " + h[2] + "</white>.");
             }
-            default -> plugin.send(sender, "Usage: /halloween zone <create|remove|list|infect|cleanse|heart>");
+            default -> plugin.send(sender, "Usage: /halloween zone <create|spawn|remove|list|infect|cleanse|heart>");
+        }
+    }
+
+    /** Tells the admin what a freshly created zone is doing. */
+    private void announceZone(Player p, String name, int radius) {
+        if (plugin.zones().status(name).equals("clean")) {
+            plugin.send(p, "Haunted zone <gold>" + name + "</gold> created (radius " + radius + "). "
+                    + "<gray>No Cursed Heart was placed: the event isn't active or infection.auto-start is off.");
+        } else {
+            plugin.send(p, "Haunted zone <gold>" + name + "</gold> created (radius " + radius + "). "
+                    + "<red>A Cursed Heart is under your feet and the infection is spreading!</red> "
+                    + "Destroy the heart to cleanse and delete the zone.");
         }
     }
 
@@ -231,7 +260,7 @@ public final class HalloweenCommands implements CommandExecutor, TabCompleter {
             }
             if (args[0].equalsIgnoreCase("pumpkin")) return filter(List.of("random"), args[1]);
             if (args[0].equalsIgnoreCase("zone")) {
-                return filter(List.of("create", "remove", "list", "infect", "cleanse", "heart"), args[1]);
+                return filter(List.of("create", "spawn", "remove", "list", "infect", "cleanse", "heart"), args[1]);
             }
         }
         if (args.length == 3 && name.equals("halloween") && sender.hasPermission("halloween.admin")
@@ -245,4 +274,4 @@ public final class HalloweenCommands implements CommandExecutor, TabCompleter {
     private static List<String> filter(List<String> options, String prefix) {
         return options.stream().filter(s -> s.startsWith(prefix.toLowerCase())).toList();
     }
-    }
+                }
