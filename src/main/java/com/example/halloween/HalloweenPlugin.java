@@ -6,14 +6,19 @@ import net.kyori.adventure.text.minimessage.MiniMessage;
 import org.bukkit.NamespacedKey;
 import org.bukkit.command.CommandSender;
 import org.bukkit.command.PluginCommand;
+import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.plugin.java.JavaPlugin;
 
+import java.io.File;
 import java.time.LocalDate;
 import java.time.format.DateTimeParseException;
 
 public final class HalloweenPlugin extends JavaPlugin {
 
     private static final MiniMessage MM = MiniMessage.miniMessage();
+
+    /** Bump this together with config-version in config.yml whenever the config gets new sections. */
+    private static final int CONFIG_VERSION = 4;
 
     private CandyManager candy;
     private PumpkinHunt pumpkinHunt;
@@ -24,7 +29,7 @@ public final class HalloweenPlugin extends JavaPlugin {
 
     @Override
     public void onEnable() {
-        saveDefaultConfig();
+        ensureCurrentConfig();
 
         npcKey = new NamespacedKey(this, "trick_or_treat_npc");
         candy = new CandyManager(this);
@@ -64,6 +69,38 @@ public final class HalloweenPlugin extends JavaPlugin {
         if (trickOrTreat != null) trickOrTreat.clearAuto();
         if (zones != null) zones.shutdown();
         if (candy != null) candy.save();
+    }
+
+    // ---------- Config upgrade ----------
+
+    /**
+     * saveDefaultConfig() never overwrites an existing file, so an old config.yml would miss newer
+     * sections (like the merchant pool). If the file on disk is older than this version, back it up,
+     * write the new default, and carry over the prefix and event dates.
+     */
+    private void ensureCurrentConfig() {
+        File file = new File(getDataFolder(), "config.yml");
+        if (!file.exists()) {
+            saveDefaultConfig();
+            return;
+        }
+        YamlConfiguration old = YamlConfiguration.loadConfiguration(file);
+        if (old.getInt("config-version", 0) >= CONFIG_VERSION) return;
+
+        File backup = new File(getDataFolder(), "config-backup-" + (System.currentTimeMillis() / 1000) + ".yml");
+        if (!file.renameTo(backup)) {
+            getLogger().warning("config.yml is from an older version and could not be replaced automatically. "
+                    + "Delete it and restart the server.");
+            return;
+        }
+        saveDefaultConfig();
+        reloadConfig();
+        for (String key : new String[] {"prefix", "event.always-active", "event.start-date", "event.end-date"}) {
+            if (old.isSet(key)) getConfig().set(key, old.get(key));
+        }
+        saveConfig();
+        getLogger().warning("Your config.yml was from an older version, so it was replaced with the new one "
+                + "(prefix and event dates were kept). The old file is saved as " + backup.getName());
     }
 
     // ---------- Event window ----------
