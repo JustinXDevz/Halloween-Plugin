@@ -18,7 +18,7 @@ public final class HalloweenPlugin extends JavaPlugin {
     private static final MiniMessage MM = MiniMessage.miniMessage();
 
     /** Bump this together with config-version in config.yml whenever the config gets new sections. */
-    private static final int CONFIG_VERSION = 4;
+    private static final int CONFIG_VERSION = 5;
 
     private CandyManager candy;
     private PumpkinHunt pumpkinHunt;
