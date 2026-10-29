@@ -50,12 +50,16 @@ import java.util.Set;
 import java.util.UUID;
 
 /**
- * Haunted Zones: circular areas with ash fog, ambient sounds, extra mobs, a candy multiplier
- * and candy drops from haunted mobs. Each zone holds a Cursed Creaking Heart (see
- * InfectionManager): the zone spreads until the heart is destroyed, then it is cleansed and deleted.
- * The heart defends itself like a hive: the closer a mob spawns to it, the tougher it is, sentries
- * guard it, and getting close sounds an alarm.
- * Zones can be created with a command, and optionally spawn automatically.
+ * Haunted Zones: areas with ash fog, ambient sounds, extra mobs, a candy multiplier and candy
+ * drops from haunted mobs. Each zone holds a Cursed Creaking Heart (see InfectionManager): the
+ * zone spreads until the heart is destroyed, then it is cleansed and deleted.
+ *
+ * The heart defends itself like a hive: the closer a mob spawns to it the tougher it is, sentries
+ * guard it, getting close sounds an alarm, and every phase makes everything stronger. Monsters
+ * also hunt down any light that is holding the infection back and smash it (the light comes back
+ * when the land heals).
+ *
+ * Zones can be created with a command, and they also spawn automatically.
  * Everything is dormant outside the event dates.
  */
 public final class HauntedZones implements Listener {
@@ -83,7 +87,7 @@ public final class HauntedZones implements Listener {
         public int z() { return z; }
         /** Radius the zone was created with. */
         public int baseRadius() { return baseRadius; }
-        /** Current radius (grows while the zone is infected). */
+        /** Radius of the circle around everything infected so far. */
         public int radius() { return radius; }
 
         void setRadius(int radius) { this.radius = radius; }
@@ -118,6 +122,10 @@ public final class HauntedZones implements Listener {
     private final Map<UUID, String> mobs = new HashMap<>();
     /** Mobs that guard the heart (they respawn). */
     private final Set<UUID> sentries = new HashSet<>();
+    /** Mobs sent to smash lights. */
+    private final Set<UUID> breakers = new HashSet<>();
+    /** Light block -> seconds monsters have been smashing it. */
+    private final Map<Long, Integer> chewProgress = new HashMap<>();
     /** Player -> last time the hive alarm went off for them. */
     private final Map<UUID, Long> alarmCooldown = new HashMap<>();
     private final Set<String> warnedMobs = new HashSet<>();
@@ -125,6 +133,7 @@ public final class HauntedZones implements Listener {
     private BukkitTask tickTask;
     private BukkitTask mobTask;
     private BukkitTask autoTask;
+    private BukkitTask lightTask;
     private int tickCount = 0;
 
     public HauntedZones(HalloweenPlugin plugin) {
@@ -230,9 +239,14 @@ public final class HauntedZones implements Listener {
         return out;
     }
 
+    /** Is this location inside the zone? (The infected area is uneven: light can hold parts of it back.) */
+    private boolean within(Zone z, Location loc) {
+        return z.contains(loc) && infection.covers(z.name(), loc.getX(), loc.getZ(), z.baseRadius());
+    }
+
     public Zone zoneAt(Location loc) {
         for (Zone z : zones.values()) {
-            if (z.contains(loc)) return z;
+            if (within(z, loc)) return z;
         }
         return null;
     }
@@ -272,6 +286,7 @@ public final class HauntedZones implements Listener {
         tickTask = Bukkit.getScheduler().runTaskTimer(plugin, this::tick, 20L, 10L);
         long mobInterval = Math.max(3, c.getInt("haunted-zones.mob-spawn-interval-seconds", 8)) * 20L;
         mobTask = Bukkit.getScheduler().runTaskTimer(plugin, this::spawnMobs, mobInterval, mobInterval);
+        lightTask = Bukkit.getScheduler().runTaskTimer(plugin, this::lightRaid, 40L, 20L);
         if (c.getBoolean("haunted-zones.auto-spawn.enabled", true)) {
             long first = Math.max(1, c.getInt("haunted-zones.auto-spawn.first-delay-minutes", 5)) * 1200L;
             long every = Math.max(1, c.getInt("haunted-zones.auto-spawn.interval-minutes", 30)) * 1200L;
@@ -283,9 +298,11 @@ public final class HauntedZones implements Listener {
     public void stop() {
         if (tickTask != null) tickTask.cancel();
         if (mobTask != null) mobTask.cancel();
+        if (lightTask != null) lightTask.cancel();
         if (autoTask != null) autoTask.cancel();
         tickTask = null;
         mobTask = null;
+        lightTask = null;
         autoTask = null;
         infection.stop();
     }
@@ -299,6 +316,8 @@ public final class HauntedZones implements Listener {
         }
         mobs.clear();
         sentries.clear();
+        breakers.clear();
+        chewProgress.clear();
     }
 
     /** Called when the plugin disables: removes mobs and saves the infection. */
@@ -461,20 +480,116 @@ public final class HauntedZones implements Listener {
         p.playSound(p.getLocation(), Sound.ENTITY_RAVAGER_ROAR, 1f, 0.6f);
 
         int n = Math.max(0, plugin.getConfig().getInt("haunted-zones.hive.alarm-mobs", 6));
+        swarm(z, p, n, 6, 14);
+    }
+
+    /** The heart was hit: the hive sends guardians (more in later phases). */
+    void onHeartHit(String zoneName, Player p) {
+        Zone z = zones.get(zoneName);
+        if (z == null) return;
+        int n = Math.max(0, plugin.getConfig().getInt("haunted-zones.hive.heart-hit-mobs", 2))
+                + infection.phaseOf(zoneName);
+        swarm(z, p, n, 4, 10);
+    }
+
+    /** Spawns top-tier guardians around a player and sets them on that player. */
+    private void swarm(Zone z, Player p, int n, double minD, double maxD) {
         List<EntityType> types = mobTypes(5);
         if (types.isEmpty()) return;
         World w = p.getWorld();
         Location pl = p.getLocation();
         for (int i = 0; i < n; i++) {
-            Location spot = findSpot(w, pl.getX(), pl.getZ(), 6, 14, z);
+            Location spot = findSpot(w, pl.getX(), pl.getZ(), minD, maxD, null);
             if (spot == null) continue;
-            int level = Math.max(4, infection.levelAt(z.name(), spot));
+            int level = Math.max(4, effLevel(z, spot));
             LivingEntity mob = spawnMob(z, spot, types.get(random.nextInt(types.size())), level, false);
             if (mob instanceof Mob m) m.setTarget(p);
         }
     }
 
+    // ---------- Monsters smash lights ----------
+
+    /** Runs every second: idle monsters head for the lights that hold the infection back and smash them. */
+    private void lightRaid() {
+        if (!plugin.isEventActive() || zones.isEmpty()) return;
+        var c = plugin.getConfig();
+        double range = Math.max(8, c.getDouble("infection.light.mob-range", 64));
+        int needed = Math.max(1, c.getInt("infection.light.break-seconds", 3));
+        int level = Math.max(1, c.getInt("infection.light.level", 8));
+
+        Set<Long> live = new HashSet<>();
+        for (Zone z : new ArrayList<>(zones.values())) {
+            List<Location> targets = infection.lightTargets(z.name());
+            if (targets.isEmpty()) continue;
+            for (Location t : targets) live.add(lightKey(t));
+
+            for (Map.Entry<UUID, String> en : new ArrayList<>(mobs.entrySet())) {
+                if (!en.getValue().equals(z.name()) || sentries.contains(en.getKey())) continue;
+                Entity ent = Bukkit.getEntity(en.getKey());
+                if (!(ent instanceof Mob mob) || !mob.isValid() || mob.getTarget() != null) continue;
+
+                Location here = mob.getLocation();
+                Location best = null;
+                double bestD = range * range;
+                for (Location t : targets) {
+                    if (t.getWorld() != here.getWorld()) continue;
+                    double d = t.distanceSquared(here);
+                    if (d < bestD) {
+                        bestD = d;
+                        best = t;
+                    }
+                }
+                if (best == null) continue;
+
+                if (bestD <= 9.0) {
+                    chew(z, best, needed, level);
+                } else {
+                    mob.getPathfinder().moveTo(best, 1.2);
+                }
+            }
+        }
+        chewProgress.keySet().retainAll(live);
+    }
+
+    /** A monster is smashing a light. When it breaks, the light is saved so it comes back when the land heals. */
+    private void chew(Zone z, Location light, int needed, int level) {
+        Block b = light.getBlock();
+        long key = lightKey(light);
+        if (b.getBlockData().getLightEmission() < level) {   // already gone
+            chewProgress.remove(key);
+            return;
+        }
+        World w = b.getWorld();
+        int progress = chewProgress.merge(key, 1, Integer::sum);
+        if (progress < needed) {
+            w.spawnParticle(Particle.BLOCK, light, 8, 0.2, 0.2, 0.2, 0.0, b.getBlockData());
+            return;
+        }
+
+        chewProgress.remove(key);
+        w.playSound(light, b.getBlockData().getSoundGroup().getBreakSound(), 1f, 0.8f);
+        w.spawnParticle(Particle.BLOCK, light, 20, 0.3, 0.3, 0.3, 0.0, b.getBlockData());
+        if (infection.breakLight(z.name(), b)) {
+            for (Player p : w.getPlayers()) {
+                if (p.getLocation().distanceSquared(light) <= 900) {
+                    p.sendActionBar(HalloweenPlugin.mm("<red>A monster smashed a light! <gray>It comes back when the land heals."));
+                }
+            }
+        }
+    }
+
+    private static long lightKey(Location l) {
+        return (((long) l.getBlockX() & 0x3FFFFFFL) << 38)
+                | (((long) l.getBlockZ() & 0x3FFFFFFL) << 12)
+                | ((l.getBlockY() + 2048) & 0xFFFL);
+    }
+
     // ---------- Extra mobs (the hive defends its heart) ----------
+
+    /** Danger level for a mob spawning here: distance to the heart plus the heart's phase. */
+    private int effLevel(Zone z, Location loc) {
+        return Math.min(5, infection.levelAt(z.name(), loc) + infection.phaseOf(z.name()));
+    }
 
     /** Base mobs plus the extra mobs unlocked at each danger level up to {@code level}. */
     private List<EntityType> mobTypes(int level) {
@@ -508,7 +623,10 @@ public final class HauntedZones implements Listener {
         mobs.entrySet().removeIf(en -> {
             Entity ent = Bukkit.getEntity(en.getKey());
             boolean gone = ent == null || !ent.isValid();
-            if (gone) sentries.remove(en.getKey());
+            if (gone) {
+                sentries.remove(en.getKey());
+                breakers.remove(en.getKey());
+            }
             return gone;
         });
 
@@ -523,26 +641,32 @@ public final class HauntedZones implements Listener {
 
             List<Player> inZone = new ArrayList<>();
             for (Player p : w.getPlayers()) {
-                if (p.getGameMode() != GameMode.SPECTATOR && z.contains(p.getLocation())) inZone.add(p);
+                if (p.getGameMode() != GameMode.SPECTATOR && within(z, p.getLocation())) inZone.add(p);
             }
             if (inZone.isEmpty()) continue;
 
+            int phase = infection.phaseOf(z.name());
+
             // Sentries keep guard around the heart whenever someone is nearby
             int[] heart = infection.heartPos(z.name());
-            if (heart != null) topUpSentries(z, w, heart, inZone);
+            if (heart != null) topUpSentries(z, w, heart, inZone, phase);
 
-            // Regular zone mobs spawn around a random player - tougher near the heart
+            // Monsters go and smash the lights that hold the infection back
+            List<Location> lights = infection.lightTargets(z.name());
+            if (!lights.isEmpty()) topUpBreakers(z, w, lights);
+
+            // Regular zone mobs spawn around a random player - tougher near the heart and in later phases
             Player target = inZone.get(random.nextInt(inZone.size()));
             Location pl = target.getLocation();
             int playerLevel = infection.levelAt(z.name(), pl);
-            int cap = baseCap + capPerLevel * playerLevel;
-            int toSpawn = 1 + extraPerLevel * playerLevel;
+            int cap = baseCap + capPerLevel * playerLevel + 2 * phase;
+            int toSpawn = 1 + extraPerLevel * playerLevel + phase;
             int count = countMobs(z.name(), false);
 
             for (int i = 0; i < toSpawn && count < cap; i++) {
                 Location spot = findSpot(w, pl.getX(), pl.getZ(), 10, 24, z);
                 if (spot == null) break;
-                int level = infection.levelAt(z.name(), spot);
+                int level = effLevel(z, spot);
                 List<EntityType> types = mobTypes(level);
                 if (types.isEmpty()) break;
                 spawnMob(z, spot, types.get(random.nextInt(types.size())), level, false);
@@ -551,10 +675,11 @@ public final class HauntedZones implements Listener {
         }
     }
 
-    /** Keeps a few elite guardians near the heart. */
-    private void topUpSentries(Zone z, World w, int[] heart, List<Player> inZone) {
+    /** Keeps elite guardians near the heart (more in later phases). */
+    private void topUpSentries(Zone z, World w, int[] heart, List<Player> inZone, int phase) {
         var c = plugin.getConfig();
-        int wanted = Math.max(0, c.getInt("haunted-zones.hive.sentries", 5));
+        int wanted = Math.max(0, c.getInt("haunted-zones.hive.sentries", 5))
+                + phase * Math.max(0, c.getInt("haunted-zones.hive.phase-sentries", 2));
         if (wanted == 0) return;
 
         double range = Math.max(10, c.getDouble("haunted-zones.hive.sentry-range", 56));
@@ -581,6 +706,29 @@ public final class HauntedZones implements Listener {
         }
     }
 
+    /** Sends a few monsters to the lights holding the infection back. */
+    private void topUpBreakers(Zone z, World w, List<Location> lights) {
+        int wanted = Math.max(0, plugin.getConfig().getInt("infection.light.breakers", 3));
+        if (wanted == 0) return;
+        int have = 0;
+        for (Map.Entry<UUID, String> en : mobs.entrySet()) {
+            if (en.getValue().equals(z.name()) && breakers.contains(en.getKey())) have++;
+        }
+        if (have >= wanted) return;
+
+        Location light = lights.get(random.nextInt(lights.size()));
+        if (light.getWorld() != w) return;
+        for (int i = have; i < wanted; i++) {
+            Location spot = findSpot(w, light.getX(), light.getZ(), 8, 14, null);
+            if (spot == null) break;
+            int level = effLevel(z, spot);
+            List<EntityType> types = mobTypes(level);
+            if (types.isEmpty()) break;
+            LivingEntity mob = spawnMob(z, spot, types.get(random.nextInt(types.size())), level, false);
+            if (mob != null) breakers.add(mob.getUniqueId());
+        }
+    }
+
     private int countMobs(String zoneName, boolean sentryOnly) {
         int n = 0;
         for (Map.Entry<UUID, String> en : mobs.entrySet()) {
@@ -598,7 +746,7 @@ public final class HauntedZones implements Listener {
             int x = (int) Math.floor(cx + Math.cos(angle) * dist);
             int zz = (int) Math.floor(cz + Math.sin(angle) * dist);
 
-            if (limit != null && !limit.contains(new Location(w, x + 0.5, 0, zz + 0.5))) continue;
+            if (limit != null && !within(limit, new Location(w, x + 0.5, 0, zz + 0.5))) continue;
             if (!w.isChunkLoaded(x >> 4, zz >> 4)) continue;
 
             Block ground = w.getHighestBlockAt(x, zz, HeightMap.MOTION_BLOCKING_NO_LEAVES);
@@ -639,7 +787,7 @@ public final class HauntedZones implements Listener {
         return mob;
     }
 
-    /** The closer to the heart, the tougher the mob. */
+    /** The closer to the heart (and the later the phase), the tougher the mob. */
     private void applyLevel(LivingEntity mob, int level) {
         if (level <= 0) return;
         int i = Math.min(level, 5);
@@ -656,13 +804,18 @@ public final class HauntedZones implements Listener {
         mob.addPotionEffect(new PotionEffect(type, PotionEffect.INFINITE_DURATION, amplifier, false, false));
     }
 
+    private void forget(UUID id) {
+        mobs.remove(id);
+        sentries.remove(id);
+        breakers.remove(id);
+    }
+
     private void removeMobsOf(String zoneName) {
         for (Map.Entry<UUID, String> en : new ArrayList<>(mobs.entrySet())) {
             if (!en.getValue().equals(zoneName)) continue;
             Entity ent = Bukkit.getEntity(en.getKey());
             if (ent != null) ent.remove();
-            mobs.remove(en.getKey());
-            sentries.remove(en.getKey());
+            forget(en.getKey());
         }
     }
 
@@ -670,8 +823,7 @@ public final class HauntedZones implements Listener {
     public void onDeath(EntityDeathEvent e) {
         LivingEntity mob = e.getEntity();
         if (!mob.getPersistentDataContainer().has(mobKey, PersistentDataType.BYTE)) return;
-        mobs.remove(mob.getUniqueId());
-        sentries.remove(mob.getUniqueId());
+        forget(mob.getUniqueId());
 
         Player killer = mob.getKiller();
         if (killer == null || !plugin.isEventActive()) return;
