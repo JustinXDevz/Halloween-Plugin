@@ -17,6 +17,8 @@ import org.bukkit.block.data.type.Leaves;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.FileConfiguration;
 import org.bukkit.configuration.file.YamlConfiguration;
+import org.bukkit.entity.Entity;
+import org.bukkit.entity.LivingEntity;
 import org.bukkit.entity.Player;
 import org.bukkit.event.EventHandler;
 import org.bukkit.event.Listener;
@@ -30,6 +32,7 @@ import org.bukkit.event.world.ChunkLoadEvent;
 import org.bukkit.potion.PotionEffect;
 import org.bukkit.potion.PotionEffectType;
 import org.bukkit.scheduler.BukkitTask;
+import org.bukkit.util.BoundingBox;
 
 import java.io.BufferedInputStream;
 import java.io.BufferedOutputStream;
@@ -43,6 +46,7 @@ import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
@@ -54,12 +58,14 @@ import java.util.Set;
 /**
  * Infection: an infected haunted zone keeps growing and corrupts the land
  * (natural ground turns cursed, everything else in the top layers is destroyed)
- * until its Cursed Creaking Heart is destroyed. Pale trees then grow over the
- * dead land. Every changed block is saved to disk, and when the zone is cleansed
- * everything is restored (and the zone is deleted).
+ * until its Cursed Creaking Heart is destroyed. Pale trees grow over the dead land.
+ * Every changed block is saved to disk, and when the zone is cleansed everything is
+ * restored (and the zone is deleted).
  *
- * The heart also acts like a hive: the closer you get, the tougher the zone's
- * monsters are (see HauntedZones), with a heartbeat, darkness and slowness near it.
+ * The infection grows in 48 slices ("sectors"). A light source in the way holds back
+ * the slice it is in (monsters then try to smash the light). Players near the infection
+ * get Hunger. As the infection gets bigger the heart goes through phases: its monsters
+ * get stronger, it grows a protective shell and needs more hits to break.
  *
  * Chests, signs, beds and other tile-entity blocks are never touched, so no
  * items can be lost.
@@ -67,6 +73,8 @@ import java.util.Set;
 public final class InfectionManager implements Listener {
 
     private static final int FILE_VERSION = 1;
+    private static final int SECTORS = 48;
+    private static final long NONE = Long.MIN_VALUE;
 
     /** One block of a growing pale tree. */
     private record Plant(int x, int y, int z, BlockData data) {}
@@ -77,12 +85,17 @@ public final class InfectionManager implements Listener {
         final String world;
         final int cx;
         final int cz;
-        int radius;
+        int radius;                                   // biggest front
+        final int[] front = new int[SECTORS];         // how far the infection has reached in each slice
+        final boolean[] blocked = new boolean[SECTORS];   // slice held back by light
         boolean spreading = true;   // false = restoring
         boolean hasHeart;
         int hx;
         int hy;
         int hz;
+        int phase;
+        int heartDamage;
+        long lastHit;
 
         // Saved to disk
         final List<String> palette = new ArrayList<>();
@@ -96,6 +109,7 @@ public final class InfectionManager implements Listener {
         final Map<Long, List<Long>> deferred = new HashMap<>();     // chunk key -> block keys (chunk unloaded)
         final ArrayDeque<Plant> growQueue = new ArrayDeque<>();     // pale tree blocks waiting to grow
         final Set<Long> treeColumns = new HashSet<>();              // where trees were planted
+        final Set<Long> lightTargets = new HashSet<>();             // lights currently holding the infection back
         boolean dirty;
 
         State(String zone, String world, int cx, int cz) {
@@ -117,6 +131,7 @@ public final class InfectionManager implements Listener {
     private final Material paleHanging;
     private final Random random = new Random();
     private final Map<String, State> states = new LinkedHashMap<>();
+    private Set<Material> shellMats = new HashSet<>();
     private int effectTick = 0;
 
     private BukkitTask workTask;
@@ -136,6 +151,7 @@ public final class InfectionManager implements Listener {
         this.paleCarpet = firstMaterial("PALE_MOSS_CARPET");
         this.paleHanging = firstMaterial("PALE_HANGING_MOSS");
         dir.mkdirs();
+        loadShellMaterials();
         load();
     }
 
@@ -165,6 +181,7 @@ public final class InfectionManager implements Listener {
 
     public void start() {
         stop();
+        loadShellMaterials();
         workTask = Bukkit.getScheduler().runTaskTimer(plugin, this::work, 20L, 1L);
         long spreadTicks = Math.max(1, cfg().getInt("infection.spread-interval-seconds", 10)) * 20L;
         spreadTask = Bukkit.getScheduler().runTaskTimer(plugin, this::spread, spreadTicks, spreadTicks);
@@ -201,6 +218,46 @@ public final class InfectionManager implements Listener {
         }
     }
 
+    // ---------- Phases (config helpers) ----------
+
+    /** Phase 0..N for an infection of this radius. */
+    private int phaseFor(int radius) {
+        List<Integer> t = cfg().getIntegerList("infection.phases.radius");
+        if (t.isEmpty()) t = List.of(40, 80, 140);
+        int p = 0;
+        for (int r : t) {
+            if (radius >= r) p++;
+        }
+        return p;
+    }
+
+    /** How many completed breaks the heart needs in this phase. */
+    private int heartHits(int phase) {
+        List<Integer> h = cfg().getIntegerList("infection.phases.heart-hits");
+        if (h.isEmpty()) h = List.of(3, 6, 10, 15);
+        return Math.max(1, h.get(Math.min(phase, h.size() - 1)));
+    }
+
+    private List<String> shellNames() {
+        List<String> l = cfg().getStringList("infection.phases.shell");
+        return l.isEmpty() ? List.of("AIR", "DEEPSLATE_BRICKS", "CRYING_OBSIDIAN", "OBSIDIAN") : l;
+    }
+
+    private Material shellFor(int phase) {
+        List<String> names = shellNames();
+        Material m = Material.matchMaterial(names.get(Math.min(phase, names.size() - 1)));
+        return (m == null || m.isAir()) ? null : m;
+    }
+
+    private void loadShellMaterials() {
+        Set<Material> set = new HashSet<>();
+        for (String n : shellNames()) {
+            Material m = Material.matchMaterial(n);
+            if (m != null && !m.isAir()) set.add(m);
+        }
+        shellMats = set;
+    }
+
     // ---------- Public API ----------
 
     /**
@@ -216,6 +273,7 @@ public final class InfectionManager implements Listener {
 
         State st = new State(z.name(), z.world(), z.x(), z.z());
         st.radius = Math.max(1, cfg().getInt("infection.start-radius", 6));
+        Arrays.fill(st.front, st.radius);
 
         boolean placed = underFeet && at != null && placeHeartUnder(st, at);
         if (!placed) placeHeart(st, z, w);
@@ -229,7 +287,7 @@ public final class InfectionManager implements Listener {
         broadcast("<dark_purple>A <light_purple>Cursed Creaking Heart</light_purple> has awakened near <white>"
                 + z.x() + ", " + z.z() + "</white> and the haunted zone <gold>" + z.name()
                 + "</gold> <red>is spreading</red>! Destroy the heart to stop it. "
-                + "The closer you get, the more its monsters defend it.");
+                + "Light holds the infection back, but its monsters will try to smash every light.");
         return true;
     }
 
@@ -244,8 +302,13 @@ public final class InfectionManager implements Listener {
     public String status(String zone) {
         State st = states.get(zone);
         if (st == null) return "clean";
-        if (st.spreading) return "infected r=" + st.radius;
-        return "healing (" + st.changes.size() + " blocks left)";
+        if (!st.spreading) return "healing (" + st.changes.size() + " blocks left)";
+        int held = 0;
+        for (boolean b : st.blocked) {
+            if (b) held++;
+        }
+        return "infected r=" + st.radius + " phase " + st.phase
+                + (held > 0 ? " (" + held + "/" + SECTORS + " held back by light)" : "");
     }
 
     public List<String> stateNames() {
@@ -257,6 +320,49 @@ public final class InfectionManager implements Listener {
         State st = states.get(zone);
         if (st == null || !st.spreading || !st.hasHeart) return null;
         return new int[] {st.hx, st.hy, st.hz};
+    }
+
+    /** Current heart phase (0 = fresh). */
+    public int phaseOf(String zone) {
+        State st = states.get(zone);
+        return (st == null || !st.spreading) ? 0 : st.phase;
+    }
+
+    /** Lights that are currently holding the infection back (monsters go and smash these). */
+    public List<Location> lightTargets(String zone) {
+        List<Location> out = new ArrayList<>();
+        State st = states.get(zone);
+        if (st == null || !st.spreading || st.lightTargets.isEmpty()) return out;
+        World w = Bukkit.getWorld(st.world);
+        if (w == null) return out;
+        for (long k : st.lightTargets) {
+            out.add(new Location(w, keyX(k) + 0.5, keyY(k) + 0.5, keyZ(k) + 0.5));
+        }
+        return out;
+    }
+
+    /**
+     * A monster smashes a light that was holding the infection back. The light is saved (nothing drops),
+     * so it comes back when the land heals.
+     */
+    public boolean breakLight(String zone, Block b) {
+        State st = states.get(zone);
+        if (st == null || !st.spreading) return false;
+        record(st, b);
+        b.setBlockData(Material.AIR.createBlockData(), false);
+        st.lightTargets.remove(blockKey(b.getX(), b.getY(), b.getZ()));
+        return true;
+    }
+
+    /** Is this spot inside the real (uneven) infected area? Uninfected zones are plain circles. */
+    public boolean covers(String zone, double x, double z, int baseRadius) {
+        State st = states.get(zone);
+        if (st == null || !st.spreading) return true;
+        double dx = x - st.cx;
+        double dz = z - st.cz;
+        double d = Math.sqrt(dx * dx + dz * dz);
+        if (d <= baseRadius) return true;
+        return d <= st.front[sectorOf(dx, dz)];
     }
 
     /**
@@ -297,7 +403,7 @@ public final class InfectionManager implements Listener {
         int dist = (int) Math.round(Math.sqrt(dx * dx + dz * dz));
         p.sendActionBar(HalloweenPlugin.mm("<dark_purple>Infection <red>" + st.radius + "m <dark_gray>| "
                 + "<light_purple>Heart <white>" + dist + "m " + compass(dx, dz)
-                + " <dark_gray>| <red>Danger " + levelAt(zone, l)));
+                + " <dark_gray>| <red>Danger " + levelAt(zone, l) + " <dark_gray>| <dark_red>Phase " + st.phase));
     }
 
     private static String compass(double dx, double dz) {
@@ -381,14 +487,61 @@ public final class InfectionManager implements Listener {
         return null;
     }
 
+    /** A shell of tough blocks around the heart. Gets tougher every phase; only fills empty air. */
+    private void applyShell(State st, World w) {
+        if (!st.hasHeart || !w.isChunkLoaded(st.hx >> 4, st.hz >> 4)) return;
+        Material mat = shellFor(st.phase);
+        if (mat == null) return;
+        BlockData data = mat.createBlockData();
+
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dz = -1; dz <= 1; dz++) {
+                    if (dx == 0 && dy == 0 && dz == 0) continue;
+                    Block b = w.getBlockAt(st.hx + dx, st.hy + dy, st.hz + dz);
+                    Material cur = b.getType();
+                    if (cur == mat) continue;
+                    if (cur.isAir()) {
+                        if (occupied(w, b)) continue;           // never wall in a player or monster
+                        record(st, b);
+                        b.setBlockData(data, false);
+                    } else if (shellMats.contains(cur)) {
+                        b.setBlockData(data, false);            // upgrade our own shell
+                    }
+                }
+            }
+        }
+    }
+
+    private static boolean occupied(World w, Block b) {
+        for (Entity e : w.getNearbyEntities(BoundingBox.of(b))) {
+            if (e instanceof LivingEntity) return true;
+        }
+        return false;
+    }
+
     // ---------- Spreading ----------
+
+    private static int sectorOf(double dx, double dz) {
+        double angle = Math.atan2(dz, dx);   // -PI .. PI
+        int s = (int) Math.floor((angle + Math.PI) / (2 * Math.PI) * SECTORS);
+        return Math.min(SECTORS - 1, Math.max(0, s));
+    }
+
+    private static double sectorStart(int s) {
+        return -Math.PI + s * (2 * Math.PI / SECTORS);
+    }
+
+    private boolean inside(State st, int x, int z) {
+        long dx = x - st.cx;
+        long dz = z - st.cz;
+        long f = st.front[sectorOf(dx, dz)];
+        return dx * dx + dz * dz <= f * f;
+    }
 
     /** Runs every few seconds: grows each infection and checks that its heart still exists. */
     private void spread() {
         boolean active = plugin.isEventActive();
-        int step = Math.max(1, cfg().getInt("infection.spread-blocks", 4));
-        int max = cfg().getInt("infection.max-radius", 0);   // 0 = never stops
-
         for (State st : new ArrayList<>(states.values())) {
             if (!st.spreading) continue;
             World w = Bukkit.getWorld(st.world);
@@ -398,19 +551,112 @@ public final class InfectionManager implements Listener {
                 beginRestore(st, null);
                 continue;
             }
-            if (max > 0 && st.radius >= max) continue;
-
-            int old = st.radius;
-            st.radius = old + step;
-            if (max > 0) st.radius = Math.min(max, st.radius);
-            st.dirty = true;
-            HauntedZones.Zone z = zones.get(st.zone);
-            if (z != null) z.setRadius(Math.max(z.baseRadius(), st.radius));
-            enqueueRing(st, w, old, st.radius);
+            growFronts(st, w);
+            if (st.phase > 0) applyShell(st, w);
         }
     }
 
-    /** Queues every column with oldR < distance <= newR from the zone center (ring only, so it stays fast). */
+    /** Every slice grows a few blocks - unless a light source is in its way. */
+    private void growFronts(State st, World w) {
+        int step = Math.max(1, cfg().getInt("infection.spread-blocks", 4));
+        int max = cfg().getInt("infection.max-radius", 0);   // 0 = never stops
+        boolean lightsOn = cfg().getBoolean("infection.light.enabled", true);
+        int lookahead = Math.max(0, cfg().getInt("infection.light.lookahead", 3));
+
+        st.lightTargets.clear();
+        int biggest = 0;
+        for (int s = 0; s < SECTORS; s++) {
+            int old = st.front[s];
+            if (max > 0 && old >= max) {
+                st.blocked[s] = false;
+                biggest = Math.max(biggest, old);
+                continue;
+            }
+            int next = old + step;
+            if (max > 0) next = Math.min(max, next);
+
+            if (lightsOn) {
+                long light = findBlockingLight(st, w, s, old, next + lookahead);
+                if (light != NONE) {
+                    st.blocked[s] = true;
+                    st.lightTargets.add(light);
+                    biggest = Math.max(biggest, old);
+                    continue;
+                }
+            }
+            st.blocked[s] = false;
+            st.front[s] = next;
+            enqueueSector(st, w, s, old, next);
+            biggest = Math.max(biggest, next);
+        }
+        st.radius = biggest;
+        st.dirty = true;
+
+        HauntedZones.Zone z = zones.get(st.zone);
+        if (z != null) z.setRadius(Math.max(z.baseRadius(), st.radius));
+
+        int newPhase = phaseFor(st.radius);
+        if (newPhase > st.phase) {
+            st.phase = newPhase;
+            broadcast("<dark_red>The Cursed Heart of <gold>" + st.zone + "</gold> grows stronger! <red>Phase "
+                    + st.phase + "</red> - its monsters are tougher, a shell forms around it, and it now takes <white>"
+                    + heartHits(st.phase) + "</white> hits to destroy.");
+            applyShell(st, w);
+        }
+    }
+
+    /**
+     * Looks at the ground the slice is about to enter. If it is lit by a breakable light source,
+     * returns that light's block key (the slice is held back); otherwise NONE.
+     */
+    private long findBlockingLight(State st, World w, int s, int r1, int r2) {
+        int level = Math.max(1, cfg().getInt("infection.light.level", 8));
+        double a1 = sectorStart(s);
+        double a2 = sectorStart(s + 1);
+        int searches = 0;
+
+        for (double r = r1 + 1.0; r <= r2 + 0.1; r += 2.0) {
+            int samples = Math.max(2, (int) Math.ceil(r * (a2 - a1) / 2.0));
+            for (int i = 0; i <= samples; i++) {
+                double a = a1 + (a2 - a1) * i / samples;
+                int x = st.cx + (int) Math.floor(Math.cos(a) * r);
+                int z = st.cz + (int) Math.floor(Math.sin(a) * r);
+                if (!w.isChunkLoaded(x >> 4, z >> 4)) continue;
+
+                int y = w.getHighestBlockYAt(x, z, HeightMap.MOTION_BLOCKING_NO_LEAVES) + 1;
+                if (w.getBlockAt(x, y, z).getLightFromBlocks() < level) continue;
+
+                if (++searches > 3) return NONE;      // not worth searching further
+                long emitter = findEmitter(w, x, y, z, level);
+                if (emitter != NONE) return emitter;
+            }
+        }
+        return NONE;
+    }
+
+    /** The light source near a lit spot. Lava and other liquids don't count - monsters can't break those. */
+    private long findEmitter(World w, int cx, int cy, int cz, int level) {
+        for (int dx = -7; dx <= 7; dx++) {
+            for (int dz = -7; dz <= 7; dz++) {
+                for (int dy = -4; dy <= 4; dy++) {
+                    int x = cx + dx;
+                    int y = cy + dy;
+                    int z = cz + dz;
+                    if (!w.isChunkLoaded(x >> 4, z >> 4)) continue;
+                    Block b = w.getBlockAt(x, y, z);
+                    Material m = b.getType();
+                    if (m.isAir() || b.isLiquid() || m == Material.LIGHT) continue;
+                    if (m.isBlock() && m.getHardness() < 0) continue;           // unbreakable
+                    if (b.getBlockData().getLightEmission() < level) continue;
+                    if (b.getState(false) instanceof TileState) continue;   // campfires, furnaces... hold items
+                    return blockKey(x, y, z);
+                }
+            }
+        }
+        return NONE;
+    }
+
+    /** Queues every column with oldR < distance <= newR from the zone center (exact ring; used at the start). */
     private void enqueueRing(State st, World w, int oldR, int newR) {
         long outer = (long) newR * newR;
         long inner = oldR < 0 ? -1 : (long) oldR * oldR;
@@ -421,6 +667,19 @@ public final class InfectionManager implements Listener {
             for (int dz = innerZ + 1; dz <= outerZ; dz++) {
                 addColumn(st, w, st.cx + dx, st.cz + dz);
                 if (dz != 0) addColumn(st, w, st.cx + dx, st.cz - dz);
+            }
+        }
+    }
+
+    /** Queues the columns of one slice between two radii (sampled finely so no column is missed). */
+    private void enqueueSector(State st, World w, int s, int oldR, int newR) {
+        double a1 = sectorStart(s);
+        double a2 = sectorStart(s + 1);
+        for (double r = Math.max(0.5, oldR - 1.0); r <= newR + 0.5; r += 0.5) {
+            int samples = Math.max(2, (int) Math.ceil(r * (a2 - a1) / 0.5));
+            for (int i = 0; i <= samples; i++) {
+                double a = a1 + (a2 - a1) * i / samples;
+                addColumn(st, w, st.cx + (int) Math.floor(Math.cos(a) * r), st.cz + (int) Math.floor(Math.sin(a) * r));
             }
         }
     }
@@ -441,14 +700,11 @@ public final class InfectionManager implements Listener {
 
     /** Queues the not-yet-infected columns of a chunk that are inside the infection. */
     private void enqueueChunk(State st, int chunkX, int chunkZ) {
-        long r2 = (long) st.radius * st.radius;
         int minX = chunkX << 4;
         int minZ = chunkZ << 4;
         for (int x = minX; x < minX + 16; x++) {
             for (int z = minZ; z < minZ + 16; z++) {
-                long dx = x - st.cx;
-                long dz = z - st.cz;
-                if (dx * dx + dz * dz > r2) continue;
+                if (!inside(st, x, z)) continue;
                 long ck = colKey(x, z);
                 if (!st.done.contains(ck)) st.pending.add(ck);
             }
@@ -548,7 +804,7 @@ public final class InfectionManager implements Listener {
 
     /** Cursed version of natural ground, or null if the block should simply be destroyed. */
     private Material cursedFor(Material m) {
-        if (isPale(m)) return m;
+        if (isPale(m) || shellMats.contains(m)) return m;
         if (m == Material.SOUL_SOIL || m == Material.SOUL_SAND || m == Material.BLACKSTONE) return m;
         if (Tag.DIRT.isTagged(m) || m == Material.FARMLAND || m == Material.DIRT_PATH) return Material.SOUL_SOIL;
         if (Tag.SAND.isTagged(m)) return Material.SOUL_SAND;
@@ -682,6 +938,7 @@ public final class InfectionManager implements Listener {
         st.pending.clear();
         st.growQueue.clear();
         st.treeColumns.clear();
+        st.lightTargets.clear();
         st.done.clear();
         st.deferred.clear();
         st.restoreQueue.clear();
@@ -760,7 +1017,15 @@ public final class InfectionManager implements Listener {
         plugin.getLogger().info("Haunted zone " + st.zone + " has been fully restored.");
     }
 
-    // ---------- Visuals and hive atmosphere ----------
+    // ---------- Visuals, hunger and hive atmosphere ----------
+
+    private boolean nearInfection(State st, Location loc, double margin) {
+        if (loc.getWorld() == null || !loc.getWorld().getName().equals(st.world)) return false;
+        double dx = loc.getX() - st.cx;
+        double dz = loc.getZ() - st.cz;
+        double d = Math.sqrt(dx * dx + dz * dz);
+        return d <= st.front[sectorOf(dx, dz)] + margin;
+    }
 
     private void effects() {
         effectTick++;
@@ -768,15 +1033,41 @@ public final class InfectionManager implements Listener {
         int slowAt = cfg().getInt("haunted-zones.hive.slowness-level", 4);
         int weakAt = cfg().getInt("haunted-zones.hive.weakness-level", 5);
         double range = Math.max(8, cfg().getDouble("haunted-zones.hive.heartbeat-range", 48));
+        boolean hungerOn = cfg().getBoolean("infection.hunger.enabled", true);
+        double hungerMargin = Math.max(0, cfg().getDouble("infection.hunger.near-distance", 12));
+        int hungerBase = Math.max(0, cfg().getInt("infection.hunger.amplifier", 0));
+        long healMs = Math.max(1, cfg().getInt("infection.phases.heal-seconds", 8)) * 1000L;
+        long now = System.currentTimeMillis();
 
         for (State st : states.values()) {
-            if (!st.spreading || !st.hasHeart) continue;
+            if (!st.spreading) continue;
             World w = Bukkit.getWorld(st.world);
-            if (w == null || !w.isChunkLoaded(st.hx >> 4, st.hz >> 4)) continue;
+            if (w == null) continue;
 
+            // The infection makes you hungry - on it and near it. Gets worse every phase.
+            if (hungerOn) {
+                int amp = Math.min(4, hungerBase + st.phase);
+                for (Player p : w.getPlayers()) {
+                    GameMode gm = p.getGameMode();
+                    if (gm != GameMode.SURVIVAL && gm != GameMode.ADVENTURE) continue;
+                    if (nearInfection(st, p.getLocation(), hungerMargin)) {
+                        p.addPotionEffect(new PotionEffect(PotionEffectType.HUNGER, 80, amp, false, false));
+                    }
+                }
+            }
+
+            if (!st.hasHeart) continue;
+
+            // The heart slowly heals if it is left alone
+            if (st.heartDamage > 0 && now - st.lastHit >= healMs) {
+                st.heartDamage--;
+                st.lastHit = now;
+            }
+
+            if (!w.isChunkLoaded(st.hx >> 4, st.hz >> 4)) continue;
             Location c = new Location(w, st.hx + 0.5, st.hy + 0.5, st.hz + 0.5);
-            w.spawnParticle(Particle.SOUL_FIRE_FLAME, c, 6, 0.4, 0.4, 0.4, 0.02);
-            w.spawnParticle(Particle.SCULK_SOUL, c, 4, 0.6, 0.6, 0.6, 0.02);
+            w.spawnParticle(Particle.SOUL_FIRE_FLAME, c, 6 + st.phase * 3, 0.4, 0.4, 0.4, 0.02);
+            w.spawnParticle(Particle.SCULK_SOUL, c, 4 + st.phase * 2, 0.6, 0.6, 0.6, 0.02);
             for (int i = 2; i <= 14; i += 3) {
                 w.spawnParticle(Particle.END_ROD, c.getX(), c.getY() + i, c.getZ(), 1, 0.05, 0.2, 0.05, 0.0);
             }
@@ -810,13 +1101,34 @@ public final class InfectionManager implements Listener {
 
     // ---------- Events ----------
 
+    /**
+     * The heart takes several completed breaks to destroy (more in later phases).
+     * Every hit makes the hive send guardians; the heart heals if you stop.
+     */
     @EventHandler(ignoreCancelled = true)
     public void onBreak(BlockBreakEvent e) {
         State st = heartState(e.getBlock());
         if (st == null || !st.spreading) return;
+
+        Player breaker = e.getPlayer();
+        int needed = heartHits(st.phase);
+        st.heartDamage++;
+        st.lastHit = System.currentTimeMillis();
+
+        if (st.heartDamage < needed) {
+            e.setCancelled(true);   // not dead yet
+            Location c = e.getBlock().getLocation().add(0.5, 0.5, 0.5);
+            c.getWorld().spawnParticle(Particle.SCULK_SOUL, c, 20, 0.4, 0.4, 0.4, 0.05);
+            c.getWorld().playSound(c, Sound.ENTITY_WARDEN_HURT, 1f, 0.7f);
+            breaker.sendActionBar(HalloweenPlugin.mm("<light_purple>Cursed Heart <white>" + st.heartDamage + "/" + needed
+                    + " <gray>- it heals if you stop!"));
+            zones.onHeartHit(st.zone, breaker);
+            return;
+        }
+
+        // Final hit: the heart breaks
         e.setDropItems(false);
         e.setExpToDrop(0);
-        Player breaker = e.getPlayer();
         String zone = st.zone;
         // Run after the break finishes so the block is already gone
         Bukkit.getScheduler().runTask(plugin, () -> cleanse(zone, breaker));
@@ -886,6 +1198,9 @@ public final class InfectionManager implements Listener {
             yml.set(base + ".cx", st.cx);
             yml.set(base + ".cz", st.cz);
             yml.set(base + ".radius", st.radius);
+            List<Integer> fronts = new ArrayList<>();
+            for (int f : st.front) fronts.add(f);
+            yml.set(base + ".fronts", fronts);
             yml.set(base + ".spreading", st.spreading);
             yml.set(base + ".has-heart", st.hasHeart);
             yml.set(base + ".hx", st.hx);
@@ -914,11 +1229,16 @@ public final class InfectionManager implements Listener {
             if (s == null) continue;
             State st = new State(name, s.getString("world", "world"), s.getInt("cx"), s.getInt("cz"));
             st.radius = s.getInt("radius", 0);
+            List<Integer> fronts = s.getIntegerList("fronts");
+            for (int i = 0; i < SECTORS; i++) {
+                st.front[i] = fronts.size() == SECTORS ? fronts.get(i) : st.radius;
+            }
             st.spreading = s.getBoolean("spreading", true);
             st.hasHeart = s.getBoolean("has-heart", false);
             st.hx = s.getInt("hx");
             st.hy = s.getInt("hy");
             st.hz = s.getInt("hz");
+            st.phase = phaseFor(st.radius);
             readData(st);
             states.put(name, st);
 
@@ -1005,4 +1325,4 @@ public final class InfectionManager implements Listener {
     private static long chunkKey(int cx, int cz) {
         return ((long) cx << 32) | (cz & 0xFFFFFFFFL);
     }
-            }
+    }
