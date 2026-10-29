@@ -1,12 +1,12 @@
 # Do not change - the plugin uses this to upgrade old config files automatically.
-config-version: 4
+config-version: 5
 
 # Chat prefix (MiniMessage format)
 prefix: "<gold>Halloween <dark_gray>» <gray>"
 
 event:
   # true = event is always on (handy for testing)
-  always-active: true
+  always-active: false
   # Inclusive dates, format yyyy-MM-dd (server local time)
   start-date: "2026-10-20"
   end-date: "2026-11-01"
@@ -65,8 +65,8 @@ haunted-zones:
   # Zombies/skeletons get a pumpkin helmet so they don't burn in daylight
   mobs: [ZOMBIE, SKELETON, SPIDER, WITCH]
   kill-candy-chance: 0.6       # chance a haunted mob drops candy when a player kills it
-  kill-candy-min: 1
-  kill-candy-max: 3            # candy is multiplied by (1 + the mob's danger level)
+  kill-candy-min: 8
+  kill-candy-max: 50            # candy is multiplied by (1 + the mob's danger level)
 
   # Zones also appear by themselves near a random player. Careful: an infected zone eats builds
   # until its heart is destroyed! Set enabled: false to only use the command.
@@ -92,8 +92,10 @@ haunted-zones:
       level-5: [RAVAGER, EVOKER, ILLUSIONER]
     # Elite guardians that keep standing around the heart (they respawn)
     sentries: 5
+    phase-sentries: 2          # extra sentries for every heart phase
     sentry-range: 56           # sentries respawn while a player is this close
     sentry-mobs: [VINDICATOR, WITHER_SKELETON, RAVAGER, EVOKER]
+    heart-hit-mobs: 2          # guardians that swarm you every time you hit the heart (+1 per phase)
     # Alarm: reaching this level makes the hive swarm you with guardians (0 = off)
     alarm-level: 4
     alarm-mobs: 6
@@ -107,12 +109,12 @@ haunted-zones:
 # Infection: an infected zone keeps growing and eats the land (natural ground turns
 # cursed, everything else in the top layers is destroyed, builds included) until its
 # Cursed Creaking Heart is destroyed. Pale trees grow over the dead land. Everything it
-# changed (trees too) is then restored. Chests, signs, beds and other containers are never
-# touched. When the event ends, every infection is cleansed automatically.
+# changed (trees and smashed lights too) is then restored. Chests, signs, beds and other
+# containers are never touched. When the event ends, every infection is cleansed automatically.
 infection:
   auto-start: true             # a new zone gets its heart and starts spreading right away
   start-radius: 6
-  spread-blocks: 4             # grows by this much...
+  spread-blocks: 4             # every part of the infection grows by this much...
   spread-interval-seconds: 10  # ...every N seconds
   max-radius: 0                # 0 = never stops until the heart is destroyed
   depth: 6                     # how many blocks down from the surface are corrupted
@@ -120,6 +122,33 @@ infection:
   restore-blocks-per-tick: 300
   cleanse-reward: 50           # candy for the player who destroys the heart
   delete-zone-on-cleanse: true # destroying the heart also deletes the zone
+
+  # LIGHT holds the infection back: the infection grows in 48 slices, and a slice can't grow
+  # while a light source is in its way. Monsters hunt those lights and smash them (nothing
+  # drops; every smashed light comes back when the land heals).
+  light:
+    enabled: true
+    level: 8                   # block light needed on the ground to hold it back (a torch within ~6 blocks)
+    lookahead: 3               # lights this far ahead of the front already stop it
+    breakers: 3                # monsters sent to smash lights (while players are in the zone)
+    break-seconds: 3           # how long a monster needs to smash a light
+    mob-range: 64              # idle monsters this close go for lights
+
+  # HUNGER: players on or near the infected area get hungry.
+  hunger:
+    enabled: true
+    near-distance: 12          # also this far outside the infected area
+    amplifier: 0               # +1 for every heart phase
+
+  # PHASES: the bigger the infection, the stronger the heart. Each phase makes all monsters
+  # tougher (and more of them), adds guardians, grows a shell around the heart, and makes
+  # the heart take more hits to break (it heals when you stop hitting it).
+  phases:
+    radius: [40, 80, 140]                 # infection size that starts phase 1, 2, 3
+    heart-hits: [3, 6, 10, 15]            # hits to destroy the heart in phase 0, 1, 2, 3
+    heal-seconds: 8                       # the heart regains one hit this often when left alone
+    shell: [AIR, DEEPSLATE_BRICKS, CRYING_OBSIDIAN, OBSIDIAN]   # blocks around the heart per phase (AIR = none)
+
   # Pale oak trees slowly grow over the infected area (placed only into empty air)
   trees:
     enabled: true
