@@ -18,13 +18,14 @@ public final class HalloweenPlugin extends JavaPlugin {
     private static final MiniMessage MM = MiniMessage.miniMessage();
 
     /** Bump this together with config-version in config.yml whenever the config gets new sections. */
-    private static final int CONFIG_VERSION = 5;
+    private static final int CONFIG_VERSION = 6;
 
     private CandyManager candy;
     private PumpkinHunt pumpkinHunt;
     private TrickOrTreat trickOrTreat;
     private HauntedZones zones;
     private ShopNpcs shopNpcs;
+    private RareGear rareGear;
     private NamespacedKey npcKey;
 
     @Override
@@ -37,7 +38,8 @@ public final class HalloweenPlugin extends JavaPlugin {
         trickOrTreat = new TrickOrTreat(this);
         zones = new HauntedZones(this);
         ShopGUI shop = new ShopGUI(this);
-        shopNpcs = new ShopNpcs(this, shop);
+        rareGear = new RareGear(this);
+        shopNpcs = new ShopNpcs(this, shop, rareGear);
 
         var pm = getServer().getPluginManager();
         pm.registerEvents(pumpkinHunt, this);
@@ -45,6 +47,7 @@ public final class HalloweenPlugin extends JavaPlugin {
         pm.registerEvents(zones, this);
         pm.registerEvents(shop, this);
         pm.registerEvents(shopNpcs, this);
+        pm.registerEvents(rareGear, this);
 
         HalloweenCommands commands = new HalloweenCommands(this, shop);
         for (String name : new String[] {"halloween", "candy", "halloweenshop"}) {
