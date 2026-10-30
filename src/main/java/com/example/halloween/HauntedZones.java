@@ -16,6 +16,7 @@ import org.bukkit.block.data.BlockData;
 import org.bukkit.configuration.ConfigurationSection;
 import org.bukkit.configuration.file.YamlConfiguration;
 import org.bukkit.entity.AbstractSkeleton;
+import org.bukkit.entity.Enemy;
 import org.bukkit.entity.Entity;
 import org.bukkit.entity.EntityType;
 import org.bukkit.entity.LivingEntity;
@@ -101,11 +102,13 @@ public final class HauntedZones implements Listener {
     }
 
     // Mob buffs per danger level (index = level, clamped to 5). -1 = no effect.
-    private static final int[] SPEED = {-1, 0, 0, 1, 1, 2};
-    private static final int[] STRENGTH = {-1, -1, 0, 0, 1, 2};
-    private static final int[] RESISTANCE = {-1, -1, -1, 0, 1, 2};
-    private static final int[] ABSORPTION = {-1, -1, 0, 1, 2, 4};
-    private static final int[] REGEN = {-1, -1, -1, -1, 0, 1};
+    // Even level 0 monsters are fast and hit hard: there are few of them, but they are not pushovers.
+    private static final int[] SPEED = {0, 0, 1, 1, 2, 2};
+    private static final int[] STRENGTH = {0, 0, 0, 1, 1, 2};
+    private static final int[] RESISTANCE = {-1, -1, 0, 0, 1, 1};
+    private static final int[] ABSORPTION = {-1, 0, 0, 1, 2, 3};
+    private static final int[] REGEN = {-1, -1, -1, -1, 0, 0};
+    private static final int[] JUMP = {-1, 0, 0, 1, 1, 2};
 
     private final HalloweenPlugin plugin;
     private final File file;
@@ -129,6 +132,8 @@ public final class HauntedZones implements Listener {
     /** Player -> last time the hive alarm went off for them. */
     private final Map<UUID, Long> alarmCooldown = new HashMap<>();
     private final Set<String> warnedMobs = new HashSet<>();
+    /** Zone -> when a player first showed up in it (starts its quiet period). */
+    private final Map<String, Long> born = new HashMap<>();
 
     private BukkitTask tickTask;
     private BukkitTask mobTask;
@@ -214,6 +219,7 @@ public final class HauntedZones implements Listener {
     void dropZone(String name) {
         if (zones.remove(name) == null) return;
         removeMobsOf(name);
+        born.remove(name);
         inside.values().removeIf(n -> n.equals(name));
         save();
     }
@@ -631,9 +637,14 @@ public final class HauntedZones implements Listener {
         });
 
         var c = plugin.getConfig();
-        int baseCap = c.getInt("haunted-zones.max-mobs-per-zone", 6);
-        int extraPerLevel = Math.max(0, c.getInt("haunted-zones.hive.mobs-per-level", 2));
-        int capPerLevel = Math.max(0, c.getInt("haunted-zones.hive.cap-per-level", 4));
+        int baseCap = c.getInt("haunted-zones.max-mobs-per-zone", 3);
+        int extraPerLevel = Math.max(0, c.getInt("haunted-zones.hive.mobs-per-level", 1));
+        int capPerLevel = Math.max(0, c.getInt("haunted-zones.hive.cap-per-level", 1));
+        int maxPerCycle = Math.max(1, c.getInt("haunted-zones.hive.max-spawn-per-cycle", 2));
+        int phaseSpawn = Math.max(0, c.getInt("haunted-zones.hive.phase-spawn-bonus", 1));
+        int phaseCap = Math.max(0, c.getInt("haunted-zones.hive.phase-cap-bonus", 2));
+        long graceMs = Math.max(0, c.getInt("haunted-zones.grace-seconds", 60)) * 1000L;
+        long now = System.currentTimeMillis();
 
         for (Zone z : new ArrayList<>(zones.values())) {
             World w = Bukkit.getWorld(z.world());
@@ -644,6 +655,10 @@ public final class HauntedZones implements Listener {
                 if (p.getGameMode() != GameMode.SPECTATOR && within(z, p.getLocation())) inZone.add(p);
             }
             if (inZone.isEmpty()) continue;
+
+            // A fresh zone stays quiet for a little while, so nobody gets swarmed the moment it appears
+            long age = now - born.computeIfAbsent(z.name(), k -> now);
+            if (age < graceMs) continue;
 
             int phase = infection.phaseOf(z.name());
 
@@ -659,8 +674,8 @@ public final class HauntedZones implements Listener {
             Player target = inZone.get(random.nextInt(inZone.size()));
             Location pl = target.getLocation();
             int playerLevel = infection.levelAt(z.name(), pl);
-            int cap = baseCap + capPerLevel * playerLevel + 2 * phase;
-            int toSpawn = 1 + extraPerLevel * playerLevel + phase;
+            int cap = baseCap + capPerLevel * playerLevel + phaseCap * phase;
+            int toSpawn = Math.min(maxPerCycle + phaseSpawn * phase, 1 + extraPerLevel * playerLevel + phase);
             int count = countMobs(z.name(), false);
 
             for (int i = 0; i < toSpawn && count < cap; i++) {
@@ -779,7 +794,7 @@ public final class HauntedZones implements Listener {
             eq.setHelmet(new ItemStack(Material.CARVED_PUMPKIN));
             eq.setDropChance(EquipmentSlot.HEAD, 0f);
         }
-        applyLevel(mob, level);
+        applyLevel(mob, level, infection.phaseOf(z.name()));
 
         mobs.put(mob.getUniqueId(), z.name());
         if (sentry) sentries.add(mob.getUniqueId());
@@ -787,16 +802,25 @@ public final class HauntedZones implements Listener {
         return mob;
     }
 
-    /** The closer to the heart (and the later the phase), the tougher the mob. */
-    private void applyLevel(LivingEntity mob, int level) {
-        if (level <= 0) return;
-        int i = Math.min(level, 5);
-        infinite(mob, PotionEffectType.SPEED, SPEED[i]);
-        infinite(mob, PotionEffectType.STRENGTH, STRENGTH[i]);
-        infinite(mob, PotionEffectType.RESISTANCE, RESISTANCE[i]);
-        infinite(mob, PotionEffectType.ABSORPTION, ABSORPTION[i]);
+    /**
+     * Zone monsters are always fast and strong. The closer to the heart, and the later the heart's
+     * phase, the tougher they get - at the last phase they hit very hard and soak a lot of damage.
+     */
+    private void applyLevel(LivingEntity mob, int level, int phase) {
+        int i = Math.max(0, Math.min(level, 5));
+        infinite(mob, PotionEffectType.SPEED, boost(SPEED[i], phase / 3));
+        infinite(mob, PotionEffectType.STRENGTH, Math.min(3, boost(STRENGTH[i], (phase + 1) / 2)));
+        infinite(mob, PotionEffectType.RESISTANCE, Math.min(2, boost(RESISTANCE[i], phase / 2)));
+        infinite(mob, PotionEffectType.ABSORPTION, boost(ABSORPTION[i], phase));
         infinite(mob, PotionEffectType.REGENERATION, REGEN[i]);
+        infinite(mob, PotionEffectType.JUMP_BOOST, JUMP[i]);   // agile
         if (level >= 4) mob.setGlowing(true);   // the heart's guardians glow so you can see them coming
+    }
+
+    /** Raises an effect amplifier (-1 = no effect) by {@code add} levels. */
+    private static int boost(int base, int add) {
+        if (add <= 0) return base;
+        return base < 0 ? add - 1 : base + add;
     }
 
     private static void infinite(LivingEntity mob, PotionEffectType type, int amplifier) {
@@ -819,24 +843,36 @@ public final class HauntedZones implements Listener {
         }
     }
 
+    /**
+     * Every monster killed in a haunted zone drops candy (a little at phase 0, much more later):
+     * our own zone monsters, and any other hostile mob that dies inside the zone.
+     */
     @EventHandler
     public void onDeath(EntityDeathEvent e) {
         LivingEntity mob = e.getEntity();
-        if (!mob.getPersistentDataContainer().has(mobKey, PersistentDataType.BYTE)) return;
-        forget(mob.getUniqueId());
+        boolean ours = mob.getPersistentDataContainer().has(mobKey, PersistentDataType.BYTE);
+        String zoneName = ours ? mobs.get(mob.getUniqueId()) : null;
+        if (ours) forget(mob.getUniqueId());
 
         Player killer = mob.getKiller();
         if (killer == null || !plugin.isEventActive()) return;
-
         var c = plugin.getConfig();
-        if (random.nextDouble() >= c.getDouble("haunted-zones.kill-candy-chance", 0.6)) return;
 
-        Integer stored = mob.getPersistentDataContainer().get(levelKey, PersistentDataType.INTEGER);
-        int level = stored == null ? 0 : stored;
+        int level;
+        if (ours) {
+            Integer stored = mob.getPersistentDataContainer().get(levelKey, PersistentDataType.INTEGER);
+            level = stored == null ? 0 : stored;
+        } else {
+            if (!c.getBoolean("haunted-zones.kill-candy-all", true) || !(mob instanceof Enemy)) return;
+            Zone z = zoneAt(mob.getLocation());
+            if (z == null) return;
+            level = effLevel(z, mob.getLocation());
+        }
+        if (random.nextDouble() >= c.getDouble("haunted-zones.kill-candy-chance", 1.0)) return;
 
         int min = c.getInt("haunted-zones.kill-candy-min", 1);
-        int max = Math.max(min, c.getInt("haunted-zones.kill-candy-max", 3));
-        int amount = (min + random.nextInt(max - min + 1)) * (1 + level);   // tougher mob = more candy
+        int max = Math.max(min, c.getInt("haunted-zones.kill-candy-max", 2));
+        int amount = (min + random.nextInt(max - min + 1)) * (1 + level);   // tougher monster = more candy
         plugin.candy().give(killer, amount);
         killer.sendActionBar(HalloweenPlugin.mm("<gold>+" + amount + " candy <gray>(haunted kill)"));
     }
@@ -846,4 +882,4 @@ public final class HauntedZones implements Listener {
         inside.remove(e.getPlayer().getUniqueId());
         alarmCooldown.remove(e.getPlayer().getUniqueId());
     }
-    }
+                          }
