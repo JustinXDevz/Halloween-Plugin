@@ -33,6 +33,7 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Random;
 import java.util.UUID;
@@ -41,6 +42,11 @@ import java.util.UUID;
  * Two NPCs that only exist when an admin summons them:
  *  - the Candy Shop NPC (opens the candy shop)
  *  - the Rare Merchant (sells rare, over-enchanted gear for candy; every summon rolls different stock)
+ *
+ * Merchant gear carries real bonuses on top of its enchantments (see RareGear): extra damage,
+ * extra damage reduction, and it never breaks. Armor never gets Blast Protection, because Blast
+ * Protection weakens the knockback of explosions - including wind charges - and you could no
+ * longer wind-charge yourself upwards.
  */
 public final class ShopNpcs implements Listener {
 
@@ -67,14 +73,16 @@ public final class ShopNpcs implements Listener {
 
     private final HalloweenPlugin plugin;
     private final ShopGUI shop;
+    private final RareGear gear;
     private final Random random = new Random();
     private final NamespacedKey shopKey;
     private final NamespacedKey merchantKey;
     private final NamespacedKey offersKey;
 
-    public ShopNpcs(HalloweenPlugin plugin, ShopGUI shop) {
+    public ShopNpcs(HalloweenPlugin plugin, ShopGUI shop, RareGear gear) {
         this.plugin = plugin;
         this.shop = shop;
+        this.gear = gear;
         this.shopKey = new NamespacedKey(plugin, "candy_shop_npc");
         this.merchantKey = new NamespacedKey(plugin, "rare_merchant");
         this.offersKey = new NamespacedKey(plugin, "merchant_offers");
@@ -170,7 +178,10 @@ public final class ShopNpcs implements Listener {
         return result;
     }
 
-    /** Builds an item with any enchantment level (levels above vanilla's limit are allowed). */
+    /**
+     * Builds a merchant item: any enchantment level, plus real bonuses (damage, damage reduction)
+     * and unbreakable, all listed in the lore.
+     */
     private ItemStack buildItem(ConfigurationSection s) {
         Material mat = Material.matchMaterial(s.getString("material", ""));
         if (mat == null || !mat.isItem()) return null;
@@ -181,12 +192,15 @@ public final class ShopNpcs implements Listener {
 
         List<Component> lore = new ArrayList<>();
         for (String line : s.getStringList("lore")) lore.add(HalloweenPlugin.mm(line));
-        if (!lore.isEmpty()) meta.lore(lore);
 
+        // Blast Protection would weaken wind charges (and every other explosion's knockback), so it is never added
+        boolean allowBlast = plugin.getConfig().getBoolean("merchant.allow-blast-protection", false);
         for (String entry : s.getStringList("enchants")) {
             String[] parts = entry.split(":");
+            String name = parts[0].trim().toLowerCase(Locale.ROOT);
+            if (!allowBlast && name.equals("blast_protection")) continue;
             try {
-                Enchantment ench = Registry.ENCHANTMENT.get(NamespacedKey.minecraft(parts[0].trim().toLowerCase()));
+                Enchantment ench = Registry.ENCHANTMENT.get(NamespacedKey.minecraft(name));
                 if (ench == null) continue;
                 int level = parts.length > 1 ? Integer.parseInt(parts[1].trim()) : 1;
                 meta.addEnchant(ench, Math.max(1, Math.min(255, level)), true);
@@ -194,8 +208,26 @@ public final class ShopNpcs implements Listener {
                 plugin.getLogger().warning("Bad enchant entry '" + entry + "' in the merchant pool.");
             }
         }
+
+        double damage = s.getDouble("bonus-damage", 0);
+        double smash = s.getDouble("smash-bonus", 0);
+        double reduction = s.getDouble("damage-reduction", 0);
+        gear.tag(meta, damage, smash, reduction);
+        if (damage > 0) lore.add(HalloweenPlugin.mm("<green>+" + fmt(damage) + " damage on every hit"));
+        if (smash > 0) lore.add(HalloweenPlugin.mm("<green>+" + fmt(smash) + " damage per block fallen"));
+        if (reduction > 0) lore.add(HalloweenPlugin.mm("<aqua>-" + fmt(reduction * 100) + "% damage taken"));
+        if (s.getBoolean("unbreakable", false)) {
+            meta.setUnbreakable(true);
+            lore.add(HalloweenPlugin.mm("<gray>Unbreakable"));
+        }
+
+        if (!lore.isEmpty()) meta.lore(lore);
         item.setItemMeta(meta);
         return item;
+    }
+
+    private static String fmt(double d) {
+        return d == Math.rint(d) ? String.valueOf((long) d) : String.format(Locale.ROOT, "%.1f", d);
     }
 
     // ---------- Stock is stored on the merchant itself ----------
@@ -303,6 +335,7 @@ public final class ShopNpcs implements Listener {
         lore.add(Component.empty());
         lore.add(HalloweenPlugin.mm("<yellow>Price: <gold>" + o.cost() + " candy"));
         lore.add(HalloweenPlugin.mm("<gray>In stock: <white>" + o.stock()));
+        lore.add(HalloweenPlugin.mm("<dark_gray>Needs free inventory space"));
         lore.add(HalloweenPlugin.mm("<dark_gray>Click to buy"));
         meta.lore(lore);
         icon.setItemMeta(meta);
@@ -353,18 +386,26 @@ public final class ShopNpcs implements Listener {
             plugin.send(p, "<red>Sold out!</red> Rare goods don't come twice.");
             return;
         }
-        if (!plugin.candy().take(p.getUniqueId(), o.cost())) {
+        if (plugin.candy().balance(p.getUniqueId()) < o.cost()) {
             p.playSound(p.getLocation(), Sound.ENTITY_VILLAGER_NO, 1f, 1f);
             plugin.send(p, "<red>Not enough candy!</red> You need <gold>" + o.cost() + "</gold>.");
             return;
         }
 
+        // No room = no sale and no charge
+        ItemStack give = o.item().clone();
+        if (!ShopGUI.hasRoom(p, give)) {
+            p.playSound(p.getLocation(), Sound.ENTITY_VILLAGER_NO, 1f, 1f);
+            plugin.send(p, "<red>Your inventory is full!</red> Free some space first - you were not charged.");
+            return;
+        }
+        if (!plugin.candy().take(p.getUniqueId(), o.cost())) return;
+
         offers.set(index, new Offer(o.item(), o.cost(), o.stock() - 1));
         writeOffers(m, offers);
 
-        Map<Integer, ItemStack> leftover = p.getInventory().addItem(o.item().clone());
-        for (ItemStack rest : leftover.values()) {
-            p.getWorld().dropItemNaturally(p.getLocation(), rest);
+        for (ItemStack rest : p.getInventory().addItem(give).values()) {
+            p.getWorld().dropItemNaturally(p.getLocation(), rest);   // should never happen (checked above)
         }
         p.playSound(p.getLocation(), Sound.ENTITY_PLAYER_LEVELUP, 1f, 0.8f);
         plugin.send(p, "Purchased for <gold>" + o.cost() + " candy</gold>! You have <gold>"
@@ -378,4 +419,4 @@ public final class ShopNpcs implements Listener {
             }
         }
     }
-    }
+        }
