@@ -25,8 +25,12 @@ import java.util.Map;
 import java.util.Random;
 
 /**
- * Config-driven candy shop. Always-available items come from shop.items;
+ * Config-driven candy shop. Always-available items come from shop.items (5 rows of 9);
  * shop.rotating.items is a pool of which a few are picked each day (same for everyone).
+ *
+ * An item with "amount" is handed over directly and needs free inventory space - if your
+ * inventory is full the purchase is refused and you are NOT charged. Items with "commands"
+ * (potion-style effects) run those commands as console.
  */
 public final class ShopGUI implements Listener {
 
@@ -46,6 +50,18 @@ public final class ShopGUI implements Listener {
 
     public ShopGUI(HalloweenPlugin plugin) {
         this.plugin = plugin;
+    }
+
+    /** True if the whole stack would fit in the player's inventory (nothing is changed). */
+    static boolean hasRoom(Player p, ItemStack stack) {
+        ItemStack[] contents = p.getInventory().getStorageContents();
+        ItemStack[] copy = new ItemStack[contents.length];
+        for (int i = 0; i < contents.length; i++) {
+            copy[i] = contents[i] == null ? null : contents[i].clone();
+        }
+        Inventory tmp = Bukkit.createInventory(null, 36);
+        tmp.setStorageContents(copy);
+        return tmp.addItem(stack.clone()).isEmpty();
     }
 
     public void open(Player player) {
@@ -119,6 +135,7 @@ public final class ShopGUI implements Listener {
         lore.add(Component.empty());
         if (special) lore.add(HalloweenPlugin.mm("<light_purple>Today's special"));
         lore.add(HalloweenPlugin.mm("<yellow>Cost: <gold>" + cost + " candy"));
+        if (s.getInt("amount", 0) > 0) lore.add(HalloweenPlugin.mm("<dark_gray>Needs free inventory space"));
         lore.add(HalloweenPlugin.mm("<dark_gray>Click to buy"));
         meta.lore(lore);
         stack.setItemMeta(meta);
@@ -147,12 +164,32 @@ public final class ShopGUI implements Listener {
         if (s == null) return;
 
         int cost = s.getInt("cost", 1);
-        if (!plugin.candy().take(p.getUniqueId(), cost)) {
+        if (plugin.candy().balance(p.getUniqueId()) < cost) {
             p.playSound(p.getLocation(), Sound.ENTITY_VILLAGER_NO, 1f, 1f);
             plugin.send(p, "<red>Not enough candy!</red> You need <gold>" + cost + "</gold>.");
             return;
         }
 
+        // Items that are handed over must fit - otherwise nothing happens and nothing is charged
+        ItemStack give = null;
+        int amount = s.getInt("amount", 0);
+        if (amount > 0) {
+            Material m = Material.matchMaterial(s.getString("material", ""));
+            if (m != null && m.isItem()) give = new ItemStack(m, amount);
+        }
+        if (give != null && !hasRoom(p, give)) {
+            p.playSound(p.getLocation(), Sound.ENTITY_VILLAGER_NO, 1f, 1f);
+            plugin.send(p, "<red>Your inventory is full!</red> Free some space first - you were not charged.");
+            return;
+        }
+
+        if (!plugin.candy().take(p.getUniqueId(), cost)) return;
+
+        if (give != null) {
+            for (ItemStack rest : p.getInventory().addItem(give).values()) {
+                p.getWorld().dropItemNaturally(p.getLocation(), rest);   // should never happen (checked above)
+            }
+        }
         for (String cmd : s.getStringList("commands")) {
             Bukkit.dispatchCommand(Bukkit.getConsoleSender(), cmd.replace("%player%", p.getName()));
         }
