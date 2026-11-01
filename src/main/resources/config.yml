@@ -1,5 +1,5 @@
 # Do not change - the plugin uses this to upgrade old config files automatically.
-config-version: 6
+config-version: 7
 
 # Chat prefix (MiniMessage format)
 prefix: "<gold>Halloween <dark_gray>» <gray>"
@@ -9,7 +9,7 @@ event:
   always-active: false
   # Inclusive dates, format yyyy-MM-dd (server local time)
   start-date: "2026-10-20"
-  end-date: "2026-11-01"
+  end-date: "2026-11-06"
 
 pumpkin-hunt:
   spawn-interval-seconds: 60   # try to spawn one every N seconds
@@ -166,6 +166,69 @@ infection:
     min-height: 4
     max-height: 7
     blocks-per-tick: 40        # growth speed
+
+# ---------------------------------------------------------------------------
+# BOSS FINALE: a boss marches on a city and the players must defend it.
+#
+# Set up a city once:   stand in the middle of town, /halloween city set <name> [radius]
+# Start the fight:      /halloween boss start [city]      (stop it: /halloween boss stop)
+# It also starts by itself on the date below (needs at least one city and players online).
+#
+# - The boss walks to the city and calls waves of weak monsters and creepers.
+# - The creepers run into the city and force themselves to explode, blowing holes in it.
+# - The boss transforms twice as it gets hurt (3 forms). Later forms fire soul bolts and slam the ground.
+# - The city has integrity. Creeper blasts, monsters reaching the centre and the boss itself wear it
+#   down. At 0 the city falls; if the boss dies first, the defenders win.
+# - Everything the creepers destroy is saved and rebuilt after the fight. Chests, signs, item frames,
+#   villagers and pets are never harmed, and nothing drops (nothing is lost or duplicated).
+# ---------------------------------------------------------------------------
+boss:
+  auto-start:
+    enabled: true
+    date: "2026-10-31"         # yyyy-MM-dd, server local time
+    time: "20:00"              # HH:mm - starts once it is this time on that date
+    city: ""                   # empty = a random city
+  names: ["<gold>The Pumpkin King", "<red>The Headless Horror", "<dark_purple>The Hollow Lord"]
+  prep-seconds: 120            # time to get ready before it arrives
+  spawn-distance: 100          # it appears this far from the city (keep it inside simulation distance)
+  health: 1500                 # boss health pool
+  health-per-player: 300       # extra health for every additional player near the city
+  transform-at: [0.66, 0.33]   # health fractions where it changes form
+  transform-seconds: 4         # how long the transformation takes (it can't be hurt meanwhile)
+  max-minions: 24              # hard cap on weaklings + creepers alive at once (keeps lag down)
+
+  # Waves (one value per form)
+  wave-seconds: [22, 18, 14]
+  wave-weaklings: [4, 6, 8]
+  wave-creepers: [1, 2, 3]
+  weakling-mobs: [ZOMBIE, SKELETON, HUSK, SILVERFISH]
+  weakling-health: 6           # weaklings die fast - there are just many of them
+  minion-candy: 1              # candy for every minion you kill
+  creeper-power: 3             # explosion size (3 = a normal creeper)
+  creeper-lifetime-seconds: 45 # a creeper that hasn't blown up by now blows up anyway
+  powered-creepers-phase: 3    # from this form on, some creepers are charged (double blast)
+
+  # Attacks
+  bolt-seconds: [0, 9, 6]      # soul bolt every N seconds per form (0 = none)
+  bolt-damage: 8
+  slam-seconds: 14             # form 3 only
+  slam-damage: 12
+  slam-radius: 9
+
+  city:
+    health: 200                # city integrity
+    creeper-damage: 8          # integrity lost per creeper blast inside the city
+    weakling-damage-per-second: 0.5   # per weakling standing in the city centre
+    boss-damage-per-second: 3  # while the boss is at the city centre
+    core-radius: 8             # the city centre
+  protect-citizens: true       # villagers and pets don't take blast damage
+  restore-blocks-per-tick: 200 # how fast the city is rebuilt afterwards
+
+  rewards:
+    participation-candy: 250   # everyone who helped (hit the boss or stood near the city)
+    top-damage-candy: [600, 350, 200]   # bonus for the top three damage dealers
+    commands: []               # run for every rewarded player, e.g. ["give %player% nether_star 1"]
+  defeat-candy: 40             # small comfort if the city falls
 
 # SHOP. An item with "amount" is handed over directly and needs free inventory space: if your
 # inventory is full the purchase is refused and you are NOT charged. An item with "commands" runs
