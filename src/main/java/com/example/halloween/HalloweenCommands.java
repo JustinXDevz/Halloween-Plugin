@@ -119,6 +119,8 @@ public final class HalloweenCommands implements CommandExecutor, TabCompleter {
                 else plugin.send(p, "<red>That spot isn't empty.");
             }
             case "zone" -> zone(sender, args);
+            case "city" -> city(sender, args);
+            case "boss" -> boss(sender, args);
             case "give" -> {
                 if (args.length < 3) { plugin.send(sender, "Usage: /halloween give <player> <amount>"); return; }
                 Player target = Bukkit.getPlayerExact(args[1]);
@@ -138,7 +140,7 @@ public final class HalloweenCommands implements CommandExecutor, TabCompleter {
                 plugin.zones().start();
                 plugin.send(sender, "Config reloaded.");
             }
-            default -> plugin.send(sender, "Usage: /halloween [npc|shopnpc|merchant|pumpkin|zone|give|reload]");
+            default -> plugin.send(sender, "Usage: /halloween [npc|shopnpc|merchant|pumpkin|zone|city|boss|give|reload]");
         }
     }
 
@@ -232,6 +234,62 @@ public final class HalloweenCommands implements CommandExecutor, TabCompleter {
         }
     }
 
+    private void city(CommandSender sender, String[] args) {
+        String sub = args.length > 1 ? args[1].toLowerCase() : "";
+        switch (sub) {
+            case "set" -> {
+                if (!(sender instanceof Player p)) { plugin.send(sender, "Players only."); return; }
+                if (args.length < 3) { plugin.send(p, "Usage: /halloween city set <name> [radius]"); return; }
+                String name = args[2].toLowerCase();
+                if (!name.matches("[a-z0-9_]{1,24}")) {
+                    plugin.send(p, "<red>Name: letters, numbers and _ only (max 24).");
+                    return;
+                }
+                int radius = 60;
+                if (args.length > 3) {
+                    try {
+                        radius = Integer.parseInt(args[3]);
+                    } catch (NumberFormatException ex) {
+                        plugin.send(p, "<red>Radius must be a number.");
+                        return;
+                    }
+                }
+                radius = Math.max(20, Math.min(250, radius));
+                plugin.boss().setCity(name, p.getLocation(), radius);
+                plugin.send(p, "City <gold>" + name + "</gold> set here (radius " + radius
+                        + "). The boss will march on this spot - stand at the centre of the town.");
+            }
+            case "remove" -> {
+                if (args.length < 3) { plugin.send(sender, "Usage: /halloween city remove <name>"); return; }
+                if (plugin.boss().removeCity(args[2])) plugin.send(sender, "City removed.");
+                else plugin.send(sender, "<red>No city with that name.");
+            }
+            case "list" -> {
+                List<String> lines = plugin.boss().describeCities();
+                if (lines.isEmpty()) { plugin.send(sender, "No cities yet. Use /halloween city set <name> [radius]."); return; }
+                for (String line : lines) plugin.send(sender, "<gold>" + line);
+            }
+            default -> plugin.send(sender, "Usage: /halloween city <set|remove|list>");
+        }
+    }
+
+    private void boss(CommandSender sender, String[] args) {
+        String sub = args.length > 1 ? args[1].toLowerCase() : "";
+        switch (sub) {
+            case "start" -> {
+                String err = plugin.boss().start(args.length > 2 ? args[2] : null);
+                if (err != null) plugin.send(sender, "<red>" + err);
+                else plugin.send(sender, "Boss event started.");
+            }
+            case "stop" -> {
+                if (plugin.boss().stop()) plugin.send(sender, "Boss event stopped.");
+                else plugin.send(sender, "<red>No boss event is running.");
+            }
+            case "status" -> plugin.send(sender, plugin.boss().status());
+            default -> plugin.send(sender, "Usage: /halloween boss <start [city]|stop|status>");
+        }
+    }
+
     /** Tells the admin what a freshly created zone is doing. */
     private void announceZone(Player p, String name, int radius) {
         if (plugin.zones().status(name).equals("clean")) {
@@ -250,7 +308,7 @@ public final class HalloweenCommands implements CommandExecutor, TabCompleter {
         if (args.length == 1) {
             if (name.equals("candy")) return filter(List.of("top"), args[0]);
             if (name.equals("halloween") && sender.hasPermission("halloween.admin")) {
-                return filter(List.of("npc", "shopnpc", "merchant", "pumpkin", "zone", "give", "reload"), args[0]);
+                return filter(List.of("npc", "shopnpc", "merchant", "pumpkin", "zone", "city", "boss", "give", "reload"), args[0]);
             }
         }
         if (args.length == 2 && name.equals("halloween") && sender.hasPermission("halloween.admin")) {
@@ -262,6 +320,13 @@ public final class HalloweenCommands implements CommandExecutor, TabCompleter {
             if (args[0].equalsIgnoreCase("zone")) {
                 return filter(List.of("create", "spawn", "remove", "list", "infect", "cleanse", "heart"), args[1]);
             }
+            if (args[0].equalsIgnoreCase("city")) return filter(List.of("set", "remove", "list"), args[1]);
+            if (args[0].equalsIgnoreCase("boss")) return filter(List.of("start", "stop", "status"), args[1]);
+        }
+        if (args.length == 3 && name.equals("halloween") && sender.hasPermission("halloween.admin")
+                && ((args[0].equalsIgnoreCase("city") && args[1].equalsIgnoreCase("remove"))
+                    || (args[0].equalsIgnoreCase("boss") && args[1].equalsIgnoreCase("start")))) {
+            return filter(plugin.boss().cityNames(), args[2]);
         }
         if (args.length == 3 && name.equals("halloween") && sender.hasPermission("halloween.admin")
                 && args[0].equalsIgnoreCase("zone")
@@ -274,4 +339,4 @@ public final class HalloweenCommands implements CommandExecutor, TabCompleter {
     private static List<String> filter(List<String> options, String prefix) {
         return options.stream().filter(s -> s.startsWith(prefix.toLowerCase())).toList();
     }
-                }
+            }
