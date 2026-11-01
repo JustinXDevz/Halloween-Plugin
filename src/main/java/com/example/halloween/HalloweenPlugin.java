@@ -18,7 +18,7 @@ public final class HalloweenPlugin extends JavaPlugin {
     private static final MiniMessage MM = MiniMessage.miniMessage();
 
     /** Bump this together with config-version in config.yml whenever the config gets new sections. */
-    private static final int CONFIG_VERSION = 6;
+    private static final int CONFIG_VERSION = 7;
 
     private CandyManager candy;
     private PumpkinHunt pumpkinHunt;
@@ -26,6 +26,7 @@ public final class HalloweenPlugin extends JavaPlugin {
     private HauntedZones zones;
     private ShopNpcs shopNpcs;
     private RareGear rareGear;
+    private BossEvent bossEvent;
     private NamespacedKey npcKey;
 
     @Override
@@ -40,6 +41,7 @@ public final class HalloweenPlugin extends JavaPlugin {
         ShopGUI shop = new ShopGUI(this);
         rareGear = new RareGear(this);
         shopNpcs = new ShopNpcs(this, shop, rareGear);
+        bossEvent = new BossEvent(this);
 
         var pm = getServer().getPluginManager();
         pm.registerEvents(pumpkinHunt, this);
@@ -48,6 +50,7 @@ public final class HalloweenPlugin extends JavaPlugin {
         pm.registerEvents(shop, this);
         pm.registerEvents(shopNpcs, this);
         pm.registerEvents(rareGear, this);
+        pm.registerEvents(bossEvent, this);
 
         HalloweenCommands commands = new HalloweenCommands(this, shop);
         for (String name : new String[] {"halloween", "candy", "halloweenshop"}) {
@@ -61,6 +64,7 @@ public final class HalloweenPlugin extends JavaPlugin {
         pumpkinHunt.start();
         trickOrTreat.start();
         zones.start();
+        bossEvent.enable();
         // Autosave every 5 minutes
         getServer().getScheduler().runTaskTimer(this, candy::save, 6000L, 6000L);
         getLogger().info("Halloween enabled. Event active: " + isEventActive());
@@ -70,6 +74,7 @@ public final class HalloweenPlugin extends JavaPlugin {
     public void onDisable() {
         if (pumpkinHunt != null) pumpkinHunt.clearAll();
         if (trickOrTreat != null) trickOrTreat.clearAuto();
+        if (bossEvent != null) bossEvent.shutdown();
         if (zones != null) zones.shutdown();
         if (candy != null) candy.save();
     }
@@ -131,6 +136,7 @@ public final class HalloweenPlugin extends JavaPlugin {
     public TrickOrTreat trickOrTreat() { return trickOrTreat; }
     public HauntedZones zones() { return zones; }
     public ShopNpcs shopNpcs() { return shopNpcs; }
+    public BossEvent boss() { return bossEvent; }
     public NamespacedKey npcKey() { return npcKey; }
 
     // ---------- Message helpers ----------
